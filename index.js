@@ -14,6 +14,36 @@ const {
 const TG = (m) => `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${m}`;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+// ------------------- Helpful SG resource links -------------------
+const SG_LINKS = {
+  "healthdev.crying_sleep": [
+    "HealthHub (Sleep): https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
+    "KKH Baby Sleep Guide: https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
+  ],
+  "healthdev.nutrition": [
+    "HealthHub (Healthy Diet for Toddlers): https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
+    "HPB Recipes: https://www.healthhub.sg/programmes/parent-hub/recipes",
+  ],
+  "healthdev.milestones": [
+    "KKH Developmental Milestones: https://www.kkh.com.sg/healtharticles/developmental-milestones",
+  ],
+  "caregiving.find": [
+    "ECDA Preschool Search: https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "LifeSG Preschool Services: https://www.life.gov.sg/services/parenting/preschool",
+  ],
+  "caregiving.helper": [
+    "MOM Work Permit (MDW): https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    "MOM Eligibility & Application: https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker/apply",
+  ],
+  "advice.conflict": [
+    "Parenting Support SG: https://familiesforlife.sg/parenting",
+  ],
+  "wellbeing.checkin": [
+    "IMH Helpline (24h): 6389 2222",
+    "HealthHub Parenting Stress Tips: https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
+  ],
+};
+
 const state = new Map();
 const log = (...args) => console.log("[BabyGPT]", ...args);
 
@@ -118,23 +148,36 @@ async function classifyIntentLLM(text) {
   }, "classifyIntentLLM");
 }
 
-async function composeAI(intent, text) {
-  log("→ composeAI", intent, text);
-  return callOpenAI(async () => {
+async function composeAI(intent, text, base = "") {
+  log("→ composeAI intent:", intent, "| text:", text);
+  try {
+    const system = `You are BabyGPT (SG). Step-based advice, ≤180 words. No diagnosis. Emergencies → 995. Intent: ${intent}`;
+    const user = `User: ${text}\nBase steps: ${base}`;
     const resp = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.3,
       messages: [
-        {
-          role: "system",
-          content:
-            "You are BabyGPT (SG). Step-based guidance only. ≤180 words. Emergencies → 995.",
-        },
-        { role: "user", content: text },
+        { role: "system", content: system },
+        { role: "user", content: user },
       ],
     });
-    return resp.choices[0].message.content.trim();
-  }, "composeAI");
+    const out = resp.choices[0].message.content?.trim() || "";
+
+    // 🧩 append official SG links automatically
+    const refs = SG_LINKS[intent] || [];
+    const moreInfo = refs.length
+      ? "\n\n*More information:*\n" + refs.map((x) => `• ${x}`).join("\n")
+      : "";
+
+    return (
+      out +
+      moreInfo +
+      "\n\n_Disclaimer: General info only. For emergencies, call 995._"
+    );
+  } catch (err) {
+    log("⚠️ composeAI failed:", err.message);
+    return "⚠️ Error generating advice. Try again later.";
+  }
 }
 
 // ------------------- Telegram handlers -------------------
