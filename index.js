@@ -18,8 +18,8 @@ const TG = (m) => `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${m}`;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const log = (...a) => console.log("[BabyGPT]", ...a);
 
-// Per-chat state
-const state = new Map(); // chatId -> { flow?:string, turns?:number }
+// per-chat state
+const state = new Map(); // chatId -> { flow?: string, turns?: number }
 
 // ───────────────────────────── Safety Rails ─────────────────────────
 const EMERGENCY_RE =
@@ -51,8 +51,6 @@ const SG_DEFAULT_LINKS = {
     "https://www.sos.org.sg",
   ],
 };
-
-// Allowed SG domains to keep (AI links are filtered to these)
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
   "hpb.gov.sg",
@@ -71,33 +69,43 @@ const INTENTS = {
   cry: {
     label: "Crying / Sleep",
     chips: [
-      { tag: "night", label: "🌙 Night waking" },
-      { tag: "colic", label: "😭 Colic" },
-      { tag: "naps", label: "💤 Naps" },
+      { tag: "night", label: "🌙 Wakes at night" },
+      { tag: "gas", label: "😣 Gas / tummy discomfort" },
+      { tag: "naps", label: "💤 Day naps" },
       { tag: "bedtime", label: "🧸 Bedtime routine" },
     ],
     patterns: {
       night: /(night|3am|midnight|every\s?night|night\s?waking)/i,
-      colic: /colic|inconsolable|gas\s?pains?/i,
+      gas: /(gas|tummy|wind|strong crying|cry a lot|inconsolable)/i,
       naps: /\bnap(s)?\b|day\s?sleep/i,
       bedtime: /bedtime|wind.?down|routine/i,
     },
     fixed: {
-      night: `Night waking basics:\n1) Feed → burp 5–10m.\n2) Dark room + white noise.\n3) Use age-appropriate wake windows.`,
-      colic: `Colic relief (non-medical):\n1) Tummy-down across forearm.\n2) Bicycle legs + gentle tummy massage.\n3) White noise/rocking; brief fresh-air walk.\nSee a GP if vomiting, fever, or poor feeding.`,
-      naps: `Nap tips:\n1) Watch sleepy cues (yawns, glazed look).\n2) Keep consistent nap windows.\n3) Bright mornings, dim afternoons.`,
-      bedtime: `Bedtime routine (20–30m): bath → feed → story → lights out.\nAvoid screens 1h before bed; keep the same steps nightly.`,
+      night: `Night waking basics:
+1) Feed → burp 5–10 minutes.
+2) Dark, quiet room + gentle white noise.
+3) Keep age-appropriate awake windows. Too little/too much day sleep can affect nights.`,
+      gas: `For gas / tummy discomfort and strong crying:
+1) Hold baby upright or across your forearm (tummy facing down).
+2) Gentle tummy massage + “bicycle” legs.
+3) Short rocking or white noise can soothe. If there is vomiting, fever, or poor feeding → see a GP.`,
+      naps: `Day naps:
+1) Watch sleepy signs (yawns, glazed look).
+2) Keep regular nap times and a short pre-nap routine.
+3) Bright mornings, dim and quiet for naps.`,
+      bedtime: `Bedtime routine (about 20–30 minutes):
+• Bath → feed → short story or cuddle → lights out.
+• Same order nightly; avoid screens 1 hour before bed.`,
     },
-    aiPrompt: `Give stepwise soothing/sleep guidance. No diagnosis. Mention age-appropriate wake windows.`,
+    aiPrompt: `Give simple step-by-step sleep/soothing guidance. No diagnosis. Mention age-appropriate awake windows.`,
   },
-
   nutrition: {
     label: "Nutrition",
     chips: [
       { tag: "solids", label: "🥄 Start solids" },
       { tag: "milk", label: "🍼 Milk amounts" },
       { tag: "meals", label: "🍚 Meal ideas" },
-      { tag: "allergy", label: "🥜 Allergies/choking" },
+      { tag: "allergy", label: "🥜 Allergy / choking safety" },
     ],
     patterns: {
       solids: /start(ing)?\s?solids|wean/i,
@@ -106,14 +114,22 @@ const INTENTS = {
       allergy: /allerg(y|ies)|peanut|egg|choke|choking/i,
     },
     fixed: {
-      solids: `Starting solids:\n• 6–12m: begin with iron-rich foods daily; 1 new food at a time.\n• Sit upright; supervise; soft textures only.`,
-      milk: `Approx. milk (guide):\n• 0–1m: 60–90ml/feed every 2–3h\n• 1–3m: 90–120ml/feed every 3–4h\n• 4–6m: 120–180ml/feed\n• After solids (6–12m): ~500–700ml/day (overall).`,
-      meals: `Simple meal ideas (6–12m):\n• Porridge with salmon & spinach\n• Mashed sweet potato & tofu\n• Banana oat pancakes (no sugar)`,
-      // allergy → AI better for personalization
+      solids: `Starting solids (6–12 months):
+• Offer iron-rich foods daily; introduce one new food at a time.
+• Sit upright; supervise closely; serve soft, safe textures.`,
+      milk: `Approximate milk amounts (guide):
+• 0–1m: 60–90ml per feed every 2–3h
+• 1–3m: 90–120ml per feed every 3–4h
+• 4–6m: 120–180ml per feed
+• After solids (6–12m): about 500–700ml total per day`,
+      meals: `Simple meal ideas (6–12 months):
+• Porridge with salmon & spinach
+• Mashed sweet potato & tofu
+• Banana oat pancakes (no added sugar)`,
+      // allergy → better via AI
     },
-    aiPrompt: `Give age-appropriate feeding steps; emphasise choking/allergy safety and local SG guidance.`,
+    aiPrompt: `Give age-appropriate feeding steps; highlight choking/allergy safety with local SG context.`,
   },
-
   caregiver: {
     label: "Caregiving",
     chips: [
@@ -127,30 +143,138 @@ const INTENTS = {
       nanny: /nanny|babysitter/i,
     },
     fixed: {
-      infantcare: `Find infantcare (SG):\n1) Search by location & hours.\n2) Visit 2–3 centres; observe hygiene & ratios.\n3) Join waitlist; check subsidies.`,
-      mdw: `Hire a helper (MDW):\n1) Check MOM eligibility; agency vs direct.\n2) Interview; define duties; buy insurance.\n3) IPA → arrival → work permit & orientation.`,
-      nanny: `Nanny/babysitter:\n• Ask for infant CPR/first-aid, references, trial session.\n• Agree on hours, fees, sick-backup plan.\n• Consider infantcare for a structured setting if feasible.`,
+      infantcare: `Find infantcare in Singapore:
+1) Search by your area and opening hours.
+2) Visit 2–3 centres; observe hygiene and staff ratio.
+3) Join waitlist; ask about fees and subsidies.`,
+      mdw: `Hire a helper (MDW):
+1) Check MOM rules; decide agency vs direct.
+2) Interview; set duties; buy insurance.
+3) IPA → arrival → work permit & orientation.`,
+      nanny: `Nanny/Babysitter:
+• Ask for infant CPR/first-aid, references, and a short trial.
+• Agree on hours, duties, fees, and backup plan for sick days.
+• Consider infantcare for a structured setting if possible.`,
     },
-    aiPrompt: `If area-specific or comparison questions arise, summarise options & next steps; include ECDA/LifeSG/MOM references.`,
+    aiPrompt: `For area-specific or comparison questions, summarise options and next steps; include ECDA/LifeSG/MOM references.`,
   },
-
   advice: {
     label: "Conflicting Advice",
     chips: [
-      { tag: "evidence", label: "📚 Evidence first" },
-      { tag: "plan", label: "🧭 Pick one plan" },
-      { tag: "family", label: "👨‍👩‍👧 Talk to family" },
+      { tag: "evidence", label: "📚 Use trusted guidance" },
+      { tag: "plan", label: "🧭 Choose one plan" },
+      { tag: "family", label: "👨‍👩‍👧 Talk with family" },
     ],
     patterns: {
       evidence: /evidence|research|guidelines|healthhub/i,
       plan: /pick one|choose|trial/i,
       family: /grand(ma|pa)|in-laws?|family/i,
     },
-    aiPrompt: `Resolve conflicting advice: cite HealthHub guidance, choose one approach, trial 3–5 days, review respectfully with family.`,
+    aiPrompt: `Help the parent choose a plan: refer to HealthHub guidance, choose one approach, try 3–5 days, then review with family.`,
   },
 };
 
-// ───────────────────── Keyboards (Main / Context / Footer) ───────────────────
+// ───────────────────── Contextual Tips (per flow) ───────────────────
+const TIPS = {
+  cry: [
+    {
+      tag: "safe-sleep",
+      label: "🛏️ Safe sleep basics",
+      text: `Safe sleep (0–12 months):
+• Baby on back, firm flat surface, no pillows/blankets/soft toys.
+• Room-share (not bed-share).
+• Keep room cool and smoke-free.`,
+    },
+    {
+      tag: "diaper-night",
+      label: "🧷 Night diaper change",
+      text: `Night diaper tips:
+• Use an overnight diaper before last feed.
+• Keep changes quick, warm, and mostly dark.
+• Use barrier cream to prevent rash.`,
+    },
+    {
+      tag: "soothing",
+      label: "🫧 Soothing basics",
+      text: `Soothing steps:
+• Feed → burp 5–10 minutes.
+• Swaddle (if age-appropriate), white noise, gentle rock.
+• Dim lights; keep voices soft and calm.`,
+    },
+  ],
+  nutrition: [
+    {
+      tag: "start-solids-check",
+      label: "🥄 Ready for solids?",
+      text: `Signs baby may be ready:
+• Sits with support; good head control.
+• Shows interest in food; opens mouth.
+• Tongue thrust reduced. Start with soft, safe textures.`,
+    },
+    {
+      tag: "choking-safety",
+      label: "🚫 Choking safety",
+      text: `Choking safety:
+• No whole nuts, whole grapes, hard/raw chunks, popcorn.
+• Cut foods into thin strips or pea-size pieces.
+• Sit upright; supervise at all times.`,
+    },
+    {
+      tag: "iron-foods",
+      label: "🧲 Iron-rich foods",
+      text: `Iron-rich ideas:
+• Meat/chicken/fish (soft flakes)
+• Egg (well-cooked), tofu, lentils
+• Iron-fortified cereal`,
+    },
+  ],
+  caregiver: [
+    {
+      tag: "visit-checklist",
+      label: "📝 Centre visit checklist",
+      text: `When visiting centres:
+• Hygiene, staff ratio, safety gates.
+• Caregiver warmth and how they talk to babies.
+• Daily routine, nap space, feeding policy.`,
+    },
+    {
+      tag: "mdw-interview",
+      label: "🗣️ Helper interview tips",
+      text: `Interview tips:
+• Infant experience, night feeds.
+• Agree on duties, rest days, phone use.
+• Ask for references; check training/health.`,
+    },
+    {
+      tag: "nanny-questions",
+      label: "❓ Ask a nanny",
+      text: `Questions:
+• First-aid/CPR? References? Trial day?
+• How do you handle feeding and naps?
+• Backup plan if sick or late?`,
+    },
+  ],
+  advice: [
+    {
+      tag: "family-talk",
+      label: "👨‍👩‍👧 Family chat tips",
+      text: `Talking with family:
+• Start with thanks; share your plan briefly.
+• Refer to HealthHub guidance to align facts.
+• Suggest a 3–5 day trial; review together.`,
+    },
+    {
+      tag: "one-plan",
+      label: "🧭 Stick to one plan",
+      text: `Avoid switching daily:
+• Choose one approach that fits your family.
+• Try for 3–5 days; track simple notes.
+• Adjust calmly based on results.`,
+    },
+  ],
+};
+
+// ───────────────────── Keyboards (Main / Context / Tips / Footer) ────────────
 const kbMain = {
   inline_keyboard: Object.entries(INTENTS).map(([flow, cfg]) => [
     {
@@ -171,10 +295,21 @@ const kbContext = (flow) => ({
     ...INTENTS[flow].chips.map((c) => [
       { text: c.label, callback_data: `chip:${flow}:${c.tag}` },
     ]),
+    [{ text: "💡 Tips", callback_data: `tips:${flow}` }],
+    [{ text: "💬 Type my own question", callback_data: `nav:type` }],
     [
       { text: "🔄 Change topic", callback_data: "nav:change" },
       { text: "🏠 Main menu", callback_data: "nav:home" },
     ],
+  ],
+});
+const kbTipsMenu = (flow) => ({
+  inline_keyboard: [
+    ...(TIPS[flow] || []).map((t) => [
+      { text: t.label, callback_data: `tip:${flow}:${t.tag}` },
+    ]),
+    [{ text: "⬅️ Back", callback_data: `flow:${flow}` }],
+    [{ text: "🏠 Main menu", callback_data: "nav:home" }],
   ],
 });
 const kbFooter = {
@@ -186,50 +321,74 @@ const kbFooter = {
   ],
 };
 
-// ───────────────────── Helpers: HTTP & Telegram ─────────────────────
-async function safeFetch(url, opts = {}, label = "fetch") {
-  try {
-    log(`→ ${label}: ${url}`);
-    const res = await fetch(url, opts);
-    const text = await res.text();
-    log(`← ${label}: ${res.status} ${text.slice(0, 200)}`);
-    return res.ok ? JSON.parse(text) : null;
-  } catch (err) {
-    log(`⚠️ ${label} failed:`, err.message);
-    return null;
+// ───────────────────── Retry Wrapper for Telegram ───────────────────
+async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 4) {
+  let attempt = 0;
+  const baseDelay = 500; // ms
+  while (attempt <= maxRetries) {
+    try {
+      log(`→ [${label}] Attempt ${attempt + 1}: ${url}`);
+      const res = await fetch(url, opts);
+      const text = await res.text();
+      if (res.ok) {
+        log(`✅ [${label}] Success (${res.status})`);
+        return JSON.parse(text);
+      }
+      if (res.status >= 500 || res.status === 429) {
+        const retryAfter = res.headers.get("Retry-After");
+        const delay = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : baseDelay * 2 ** attempt;
+        log(`⚠️ [${label}] HTTP ${res.status}, retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+        attempt++;
+        continue;
+      }
+      log(`❌ [${label}] Permanent failure: ${res.status} ${text}`);
+      return null;
+    } catch (err) {
+      const delay = baseDelay * 2 ** attempt;
+      log(
+        `⚠️ [${label}] Network error (${
+          err.code || err.message
+        }), retrying in ${delay}ms...`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+      attempt++;
+    }
   }
+  log(`🚨 [${label}] All retries failed after ${maxRetries + 1} attempts.`);
+  return null;
 }
-const sendMsg = (chat_id, text, keyboard, label = "sendMessage") =>
-  safeFetch(
-    TG("sendMessage"),
+async function tgPost(method, payload, label = method) {
+  return sendWithRetry(
+    TG(method),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id,
-        text,
-        parse_mode: "Markdown",
-        disable_web_page_preview: false,
-        reply_markup: keyboard,
-      }),
+      body: JSON.stringify(payload),
+    },
+    label
+  );
+}
+const sendMsg = (chat_id, text, keyboard, label = "sendMessage") =>
+  tgPost(
+    "sendMessage",
+    {
+      chat_id,
+      text,
+      parse_mode: "Markdown",
+      disable_web_page_preview: false,
+      reply_markup: keyboard,
     },
     label
   );
 const answerCbq = (id, label = "answerCallbackQuery") =>
-  safeFetch(
-    TG("answerCallbackQuery"),
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: id }),
-    },
-    label
-  );
+  tgPost("answerCallbackQuery", { callback_query_id: id }, label);
 
 // ───────────────────── URL extraction & SG filter ───────────────────
 function extractUrls(text = "") {
-  const urls = Array.from(new Set(text.match(/https?:\/\/[^\s)\]]+/g) || []));
-  return urls;
+  return Array.from(new Set(text.match(/https?:\/\/[^\s)\]]+/g) || []));
 }
 function isAllowedSG(url) {
   try {
@@ -242,7 +401,7 @@ function isAllowedSG(url) {
 function mergeSgLinks(defaultLinks = [], aiLinks = []) {
   const filtered = [...defaultLinks, ...aiLinks.filter(isAllowedSG)];
   const unique = Array.from(new Set(filtered));
-  return unique.slice(0, 6); // keep it tight
+  return unique.slice(0, 6);
 }
 
 // ───────────────────── OpenAI helpers & judge ───────────────────────
@@ -265,17 +424,14 @@ async function callOpenAI(fn, label) {
 
 // 1) Generate AI reply (no links appended here)
 async function composeAI(flow, userText, chipTag = null, baseHint = "") {
-  const system = `You are BabyGPT (Singapore). Short step-by-step guidance first, then one friendly line. ≤180 words.
+  const system = `You are BabyGPT (Singapore). Short, clear steps first, then one friendly line. ≤180 words.
 No diagnosis. Emergencies → call 995. Prefer SG official links. Audience: first-time parents of newborns/toddlers.`;
   const rules = `House rules:
-- Be concise and practical (steps 1-3).
-- Use Singapore context (HealthHub, ECDA, MOM).
-- Avoid medical claims; recommend GP/995 if urgent.
-- Warm tone, not prescriptive.`;
-
+- Be simple and kind. No medical jargon.
+- Singapore context (HealthHub, ECDA, MOM).
+- Avoid medical claims; suggest GP/995 for urgent cases.`;
   const chipHint = chipTag ? `Subtopic focus: ${chipTag}.` : "";
   const styleHint = INTENTS[flow]?.aiPrompt || "";
-
   const prompt = `User message:
 """${userText}"""
 
@@ -300,7 +456,6 @@ Context:
     );
   }, "composeAI");
 
-  // return AI body + any SG links detected in it (filtered later)
   return { aiBody: text, aiLinksRaw: extractUrls(text) };
 }
 
@@ -323,8 +478,8 @@ async function judgeAnswers({ flow, userText, defaultText, aiText }) {
 
 Criteria (in order):
 1) Accuracy and safety for newborn care (no diagnosis).
-2) Local relevance (SG context, cite SG sources if any).
-3) Clarity and actionability (step-first).
+2) Local relevance (SG context, use SG sources).
+3) Clarity and actionability (simple steps first).
 4) Brevity (≤180 words is good).
 
 Return JSON only.
@@ -348,7 +503,7 @@ AI generated answer:
         {
           role: "system",
           content:
-            "You are an impartial judge. Compare two answers and pick the better one with a confidence score 0–1.",
+            "You are an impartial judge. Compare two answers, pick the better one and give a confidence 0–1.",
         },
         { role: "user", content: judgePrompt },
       ],
@@ -370,7 +525,8 @@ function matchChipByRegex(flow, text) {
 }
 function ruleIntentTop(text) {
   const s = text.toLowerCase();
-  if (/cry|sleep|colic|night waking|won'?t sleep/.test(s)) return "cry";
+  if (/cry|sleep|night waking|won'?t sleep|tummy|gas|strong crying/.test(s))
+    return "cry";
   if (/solid|wean|milk|feed|recipe|diet|meal/.test(s)) return "nutrition";
   if (
     /infantcare|preschool|nanny|babysitter|daycare|helper|mdw|maid|permit/.test(
@@ -378,7 +534,8 @@ function ruleIntentTop(text) {
     )
   )
     return "caregiver";
-  if (/conflicting|too many opinions|overload/.test(s)) return "advice";
+  if (/conflicting|too many opinions|overload|disagree/.test(s))
+    return "advice";
   if (/overwhelmed|anxious|tired|burnt\s?out/.test(s)) return "wellbeing";
   if (/help|menu/.test(s)) return "help";
   return "unknown";
@@ -412,13 +569,13 @@ app.post("/telegram/webhook", async (req, res) => {
         const flow = data.split(":")[1];
         state.set(chatId, { flow, turns: 0 });
         const promptMap = {
-          cry: "Tell me the crying/sleep details (age + when it happens).",
+          cry: "Tell me your baby’s age and when the crying/sleep issue happens. 💬 *You can also type your own question anytime!*",
           nutrition:
-            "What’s your feeding concern? (starting solids, milk amounts, meal ideas)",
+            "Share your feeding concern (starting solids, milk amounts, meal ideas). 💬 *You can also type your own question anytime!*",
           caregiver:
-            "Which caregiver do you need? (infantcare, helper/MDW, nanny) & your area?",
+            "Tell me what you need (infantcare, helper/MDW, nanny) and your area. 💬 *You can also type your own question anytime!*",
           advice:
-            "What conflicting advice are you getting? I’ll help you pick a plan.",
+            "Tell me the advice you’ve received and what feels confusing. 💬 *You can also type your own question anytime!*",
         };
         await sendMsg(
           chatId,
@@ -429,10 +586,33 @@ app.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
+      if (data.startsWith("tips:")) {
+        const flow = data.split(":")[1];
+        await sendMsg(
+          chatId,
+          "Here are some quick tips:",
+          kbTipsMenu(flow),
+          "send(tips-menu)"
+        );
+        return;
+      }
+
+      if (data.startsWith("tip:")) {
+        const [, flow, tag] = data.split(":");
+        const tip = (TIPS[flow] || []).find((t) => t.tag === tag);
+        const body = tip ? tip.text : "No tip found.";
+        await sendMsg(
+          chatId,
+          `${body}\n\n(You can still type your own question anytime.)`,
+          kbFooter,
+          "send(tip)"
+        );
+        return;
+      }
+
       if (data.startsWith("chip:")) {
         const [, flow, tag] = data.split(":"); // e.g. chip:cry:night
-        // Synthesize a short user text to route through the same logic
-        const syn = `${flow} ${tag}`; // minimal hint
+        const syn = `${flow} ${tag}`;
         await handleMessageLike(chatId, syn, {
           forcedFlow: flow,
           forcedTag: tag,
@@ -440,16 +620,30 @@ app.post("/telegram/webhook", async (req, res) => {
         return;
       }
 
+      if (data === "nav:type") {
+        await sendMsg(
+          chatId,
+          "Great—just type your question now. The buttons are optional.",
+          kbFooter,
+          "send(type-prompt)"
+        );
+        return;
+      }
       if (data === "nav:home") {
         state.delete(chatId);
-        await sendMsg(chatId, "Main menu:", kbMain, "send(home)");
+        await sendMsg(
+          chatId,
+          "Main menu (you can also type your own question anytime):",
+          kbMain,
+          "send(home)"
+        );
         return;
       }
       if (data === "nav:change") {
         state.delete(chatId);
         await sendMsg(
           chatId,
-          "Changing topic. What would you like help with now?",
+          "Changing topic. Choose one below, or just type your question:",
           kbMain,
           "send(change)"
         );
@@ -468,17 +662,22 @@ app.post("/telegram/webhook", async (req, res) => {
     if (text === "/start") {
       state.delete(chatId);
       const intro = `
-👶 *Hi, I'm BabyGPT (Singapore Edition)!*
-Your friendly companion for first-time parents of babies aged 0–3.
+👶 *Hi, I'm BabyGPT (Singapore Edition)!*  
+Your friendly companion for *first-time parents* of babies aged *0–3 years*.
 
 I can help with:
-1️⃣ *Health & Development* — sleep/crying, feeding & nutrition, milestones  
-2️⃣ *Caregiving Support* — infantcare & helper info, and resolving conflicting advice  
-3️⃣ *Parental Wellbeing* — gentle self-care pointers
+1️⃣ *Health & Development* — sleep & crying, feeding & growth milestones  
+2️⃣ *Caregiving Support* — infantcare options, helpers, and resolving conflicting advice  
+3️⃣ *Parental Wellbeing* — self-care and emotional balance
 
-I’m not a medical professional, but I’ll summarise steps and include trusted SG resources (HealthHub, ECDA, MOM).
-*What would you like help with today?* 👇
-      `;
+✨ *You don’t have to stick to buttons!*  
+Just **type your question in your own words**, like:  
+> “My baby keeps waking up at 3am, what should I do?”  
+> “How much milk should a 4-month-old drink?”
+
+I’m not a medical professional, but I’ll share practical steps and *trusted Singapore resources* (HealthHub, ECDA, MOM).
+
+💬 *What would you like help with today?*`;
       await sendMsg(chatId, intro.trim(), kbMain, "send(/start)");
       return;
     }
@@ -511,36 +710,35 @@ async function handleMessageLike(chatId, userText, options = {}) {
   const s = state.get(chatId) || {};
   let flow = options.forcedFlow || s.flow || ruleIntentTop(userText);
   if (flow === "help") {
-    await sendMsg(chatId, "Choose a topic:", kbMain);
+    await sendMsg(
+      chatId,
+      "Choose a topic below, or type your question:",
+      kbMain
+    );
     return;
   }
   if (flow === "unknown") {
-    // fallback to default flow (nutrition) to reduce friction
     flow = "nutrition";
-  }
+  } // soft default
 
-  // within a flow, detect chip tag
   let chipTag = options.forcedTag || matchChipByRegex(flow, userText);
 
-  // Fixed default (if any)
   const defaultText =
     chipTag && INTENTS[flow]?.fixed?.[chipTag]
       ? INTENTS[flow].fixed[chipTag]
       : null;
 
-  // Determine base hint for AI
   const baseHint =
     flow === "nutrition"
       ? "0–6m: milk on demand; 6–12m: start iron-rich solids; >12m: family meals; avoid choking."
       : flow === "cry"
-      ? "Soothing: feed → burp → swaddle + white noise → dim lights; keep age-appropriate wake windows."
+      ? "Soothing: feed → burp → swaddle + white noise → dim lights; keep age-appropriate awake windows."
       : flow === "advice"
-      ? "Resolver: 1) Prefer HealthHub guidance 2) Pick one approach 3) Trial 3–5 days, then review."
+      ? "Plan: use trusted guidance (HealthHub), choose one approach, try 3–5 days, then review."
       : flow === "caregiver"
-      ? "Summarise options; point to ECDA/LifeSG/MOM; give next-step checklist."
+      ? "Summarise choices; link ECDA/LifeSG/MOM; give next-step checklist."
       : "";
 
-  // Compose AI answer (and capture any links it mentions)
   let aiBody = null,
     aiLinksRaw = [];
   try {
@@ -559,7 +757,6 @@ async function handleMessageLike(chatId, userText, options = {}) {
     throw err;
   }
 
-  // Decide: default vs AI (judge), if defaultText exists
   let finalBody = aiBody;
   if (defaultText) {
     try {
@@ -573,29 +770,21 @@ async function handleMessageLike(chatId, userText, options = {}) {
       const useAI = verdict.better === "ai" && verdict.confidence >= 0.65;
       finalBody = useAI ? aiBody : defaultText;
     } catch (err) {
-      if (err.message === "openai_quota") {
-        // If judge failed due to quota, fall back to safe default
-        finalBody = defaultText;
-      } else {
+      if (err.message === "openai_quota") finalBody = defaultText;
+      else {
         log("⚠️ judge error, using default:", err.message);
         finalBody = defaultText;
       }
     }
   }
 
-  // Build “More information” links:
-  //  - start with canonical flow links
-  //  - add any SG-only links the AI provided
   const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
   const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
-
-  // Always add disclaimer at the end
   const reply = `${finalBody}${moreInfo}\n\n_Disclaimer: General info only. For emergencies, call 995._`;
 
-  // Track turns & footer
   const turns = (s.turns || 0) + 1;
   const replyKb =
     s.flow || options.forcedFlow ? (turns <= 3 ? kbFooter : undefined) : kbMain;
@@ -610,16 +799,11 @@ app.get("/health", (_req, res) => res.status(200).send("ok"));
 app.listen(PORT, async () => {
   log(`🚀 BabyGPT server on :${PORT}`);
   if (PUBLIC_URL && TELEGRAM_BOT_TOKEN) {
-    const payload = {
-      url: `${PUBLIC_URL}/telegram/webhook`,
-      allowed_updates: ["message", "callback_query", "edited_message"],
-    };
-    await safeFetch(
-      TG("setWebhook"),
+    await tgPost(
+      "setWebhook",
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        url: `${PUBLIC_URL}/telegram/webhook`,
+        allowed_updates: ["message", "callback_query", "edited_message"],
       },
       "setWebhook"
     );
