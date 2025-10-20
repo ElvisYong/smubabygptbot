@@ -322,9 +322,13 @@ const kbFooter = {
 };
 
 // ───────────────────── Retry Wrapper for Telegram ───────────────────
-async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 4) {
+// Increased attempts to 50, capped backoff (respect Retry-After). Telegram per-chat rate is ~1 msg/sec;
+// we'll cap delay at 4000ms to stay reasonable, but honor Retry-After when present.
+async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 50) {
   let attempt = 0;
-  const baseDelay = 500; // ms
+  const baseDelay = 250; // ms
+  const maxDelay = 4000; // ms
+
   while (attempt <= maxRetries) {
     try {
       log(`→ [${label}] Attempt ${attempt + 1}: ${url}`);
@@ -334,20 +338,35 @@ async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 4) {
         log(`✅ [${label}] Success (${res.status})`);
         return JSON.parse(text);
       }
-      if (res.status >= 500 || res.status === 429) {
-        const retryAfter = res.headers.get("Retry-After");
-        const delay = retryAfter
-          ? parseInt(retryAfter) * 1000
-          : baseDelay * 2 ** attempt;
+
+      // Retry only for 429 or 5xx
+      if (res.status === 429 || res.status >= 500) {
+        // Read Retry-After from header or JSON body (Telegram may return parameters.retry_after)
+        let delay = null;
+        const retryAfterHeader = res.headers.get("Retry-After");
+        if (retryAfterHeader) delay = parseInt(retryAfterHeader, 10) * 1000;
+        else {
+          try {
+            const body = JSON.parse(text);
+            const s = body?.parameters?.retry_after;
+            if (typeof s === "number") delay = s * 1000;
+          } catch {
+            /* ignore */
+          }
+        }
+        if (!delay) delay = Math.min(maxDelay, baseDelay * 2 ** attempt);
+
         log(`⚠️ [${label}] HTTP ${res.status}, retrying in ${delay}ms...`);
         await new Promise((r) => setTimeout(r, delay));
         attempt++;
         continue;
       }
+
+      // Permanent client errors
       log(`❌ [${label}] Permanent failure: ${res.status} ${text}`);
       return null;
     } catch (err) {
-      const delay = baseDelay * 2 ** attempt;
+      const delay = Math.min(maxDelay, baseDelay * 2 ** attempt);
       log(
         `⚠️ [${label}] Network error (${
           err.code || err.message
@@ -357,6 +376,7 @@ async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 4) {
       attempt++;
     }
   }
+
   log(`🚨 [${label}] All retries failed after ${maxRetries + 1} attempts.`);
   return null;
 }
@@ -611,6 +631,7 @@ app.post("/telegram/webhook", async (req, res) => {
       }
 
       if (data.startsWith("chip:")) {
+        // Chip taps will pass through AI (with judge against canonical fixed) ONCE.
         const [, flow, tag] = data.split(":"); // e.g. chip:cry:night
         const syn = `${flow} ${tag}`;
         await handleMessageLike(chatId, syn, {
@@ -705,7 +726,9 @@ I’m not a medical professional, but I’ll share practical steps and *trusted 
   }
 });
 
-// ───────────────────── Core message routing (with judge) ─────────────────────
+// ───────────────────── Core message routing (AI-first for follow-ups) ─────────────────────
+// CHANGE: Free-typed follow-ups now ALWAYS go to OpenAI (no regex→fixed fallbacks).
+// Only an explicit chip tap (forcedTag) compares AI vs default via judge ONCE.
 async function handleMessageLike(chatId, userText, options = {}) {
   const s = state.get(chatId) || {};
   let flow = options.forcedFlow || s.flow || ruleIntentTop(userText);
@@ -721,8 +744,11 @@ async function handleMessageLike(chatId, userText, options = {}) {
     flow = "nutrition";
   } // soft default
 
-  let chipTag = options.forcedTag || matchChipByRegex(flow, userText);
+  // IMPORTANT: for free-typed follow-ups, do NOT auto-detect chip by regex
+  // to avoid returning hardcoded text again. Only use chipTag if explicitly forced by a chip tap.
+  let chipTag = options.forcedTag || null;
 
+  // Default text only exists when user tapped a chip (first hop).
   const defaultText =
     chipTag && INTENTS[flow]?.fixed?.[chipTag]
       ? INTENTS[flow].fixed[chipTag]
@@ -757,6 +783,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
     throw err;
   }
 
+  // If we have a canonical default (only for chip tap), run judge once.
   let finalBody = aiBody;
   if (defaultText) {
     try {
