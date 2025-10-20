@@ -50,6 +50,10 @@ const SG_DEFAULT_LINKS = {
     "https://www.imh.com.sg/contact-us/Pages/default.aspx",
     "https://www.sos.org.sg",
   ],
+  unknown: [
+    "https://familiesforlife.sg/parenting",
+    "https://www.healthhub.sg/live-healthy",
+  ],
 };
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
@@ -62,6 +66,7 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "familiesforlife.sg",
 ];
 
 // ───────────────── Intent Taxonomy (flows → chips) ──────────────────
@@ -126,7 +131,6 @@ const INTENTS = {
 • Porridge with salmon & spinach
 • Mashed sweet potato & tofu
 • Banana oat pancakes (no added sugar)`,
-      // allergy → better via AI
     },
     aiPrompt: `Give age-appropriate feeding steps; highlight choking/allergy safety with local SG context.`,
   },
@@ -322,12 +326,11 @@ const kbFooter = {
 };
 
 // ───────────────────── Retry Wrapper for Telegram ───────────────────
-// Increased attempts to 50, capped backoff (respect Retry-After). Telegram per-chat rate is ~1 msg/sec;
-// we'll cap delay at 4000ms to stay reasonable, but honor Retry-After when present.
+// 50 attempts, exponential backoff with cap; honor Retry-After where provided.
 async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 50) {
   let attempt = 0;
   const baseDelay = 250; // ms
-  const maxDelay = 4000; // ms
+  const maxDelay = 4000; // ms (≈ Telegram per-chat 1 msg/sec; cap at 4s)
 
   while (attempt <= maxRetries) {
     try {
@@ -339,9 +342,7 @@ async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 50) {
         return JSON.parse(text);
       }
 
-      // Retry only for 429 or 5xx
       if (res.status === 429 || res.status >= 500) {
-        // Read Retry-After from header or JSON body (Telegram may return parameters.retry_after)
         let delay = null;
         const retryAfterHeader = res.headers.get("Retry-After");
         if (retryAfterHeader) delay = parseInt(retryAfterHeader, 10) * 1000;
@@ -355,14 +356,12 @@ async function sendWithRetry(url, opts = {}, label = "fetch", maxRetries = 50) {
           }
         }
         if (!delay) delay = Math.min(maxDelay, baseDelay * 2 ** attempt);
-
         log(`⚠️ [${label}] HTTP ${res.status}, retrying in ${delay}ms...`);
         await new Promise((r) => setTimeout(r, delay));
         attempt++;
         continue;
       }
 
-      // Permanent client errors
       log(`❌ [${label}] Permanent failure: ${res.status} ${text}`);
       return null;
     } catch (err) {
@@ -444,12 +443,21 @@ async function callOpenAI(fn, label) {
 
 // 1) Generate AI reply (no links appended here)
 async function composeAI(flow, userText, chipTag = null, baseHint = "") {
-  const system = `You are BabyGPT (Singapore). Short, clear steps first, then one friendly line. ≤180 words.
+  let system = `You are BabyGPT (Singapore). Short, clear steps first, then one friendly line. ≤180 words.
 No diagnosis. Emergencies → call 995. Prefer SG official links. Audience: first-time parents of newborns/toddlers.`;
+
+  // Gentle, respectful fallback persona for unknown topics
+  if (flow === "unknown") {
+    system = `You are BabyGPT (Singapore), a warm, respectful parenting assistant.
+Be kind, non-judgmental, and supportive. Avoid diagnosis or medical claims.
+Offer gentle encouragement, practical next steps, or simple resources when appropriate. Keep it ≤180 words.`;
+  }
+
   const rules = `House rules:
-- Be simple and kind. No medical jargon.
-- Singapore context (HealthHub, ECDA, MOM).
-- Avoid medical claims; suggest GP/995 for urgent cases.`;
+- Use simple, friendly language.
+- Singapore context (HealthHub, ECDA, MOM) when giving resources.
+- Encourage seeing a GP for health concerns; emergencies → 995.`;
+
   const chipHint = chipTag ? `Subtopic focus: ${chipTag}.` : "";
   const styleHint = INTENTS[flow]?.aiPrompt || "";
   const prompt = `User message:
@@ -535,14 +543,6 @@ AI generated answer:
 }
 
 // ───────────────────── Intent Matching Helpers ──────────────────────
-function matchChipByRegex(flow, text) {
-  const cfg = INTENTS[flow];
-  if (!cfg?.patterns) return null;
-  for (const [tag, re] of Object.entries(cfg.patterns)) {
-    if (re.test(text)) return tag;
-  }
-  return null;
-}
 function ruleIntentTop(text) {
   const s = text.toLowerCase();
   if (/cry|sleep|night waking|won'?t sleep|tummy|gas|strong crying/.test(s))
@@ -558,7 +558,7 @@ function ruleIntentTop(text) {
     return "advice";
   if (/overwhelmed|anxious|tired|burnt\s?out/.test(s)) return "wellbeing";
   if (/help|menu/.test(s)) return "help";
-  return "unknown";
+  return "unknown"; // let unknown flow go to AI with gentle persona
 }
 
 // ───────────────────── Telegram Webhook Handler ─────────────────────
@@ -631,8 +631,8 @@ app.post("/telegram/webhook", async (req, res) => {
       }
 
       if (data.startsWith("chip:")) {
-        // Chip taps will pass through AI (with judge against canonical fixed) ONCE.
-        const [, flow, tag] = data.split(":"); // e.g. chip:cry:night
+        // Chip taps: AI + judge vs canonical once.
+        const [, flow, tag] = data.split(":");
         const syn = `${flow} ${tag}`;
         await handleMessageLike(chatId, syn, {
           forcedFlow: flow,
@@ -726,9 +726,7 @@ I’m not a medical professional, but I’ll share practical steps and *trusted 
   }
 });
 
-// ───────────────────── Core message routing (AI-first for follow-ups) ─────────────────────
-// CHANGE: Free-typed follow-ups now ALWAYS go to OpenAI (no regex→fixed fallbacks).
-// Only an explicit chip tap (forcedTag) compares AI vs default via judge ONCE.
+// ───────────────────── Core message routing (AI-first + unknown safe) ─────────────────────
 async function handleMessageLike(chatId, userText, options = {}) {
   const s = state.get(chatId) || {};
   let flow = options.forcedFlow || s.flow || ruleIntentTop(userText);
@@ -740,22 +738,15 @@ async function handleMessageLike(chatId, userText, options = {}) {
     );
     return;
   }
-  if (flow === "unknown") {
-    flow = "nutrition";
-  } // soft default
 
-  // IMPORTANT: for free-typed follow-ups, do NOT auto-detect chip by regex
-  // to avoid returning hardcoded text again. Only use chipTag if explicitly forced by a chip tap.
-  let chipTag = options.forcedTag || null;
+  // Only use chipTag if explicitly set by chip tap (prevents repeated hardcoded answers)
+  const chipTag = options.forcedTag || null;
 
-  // Default text only exists when user tapped a chip (first hop).
-  const defaultText =
-    chipTag && INTENTS[flow]?.fixed?.[chipTag]
-      ? INTENTS[flow].fixed[chipTag]
-      : null;
-
+  // If unknown, use gentle persona; also show basic handles (Change topic/Main menu)
   const baseHint =
-    flow === "nutrition"
+    flow === "unknown"
+      ? "Be gentle and respectful. Encourage kindly. Avoid diagnosis. Offer practical next steps in simple words."
+      : flow === "nutrition"
       ? "0–6m: milk on demand; 6–12m: start iron-rich solids; >12m: family meals; avoid choking."
       : flow === "cry"
       ? "Soothing: feed → burp → swaddle + white noise → dim lights; keep age-appropriate awake windows."
@@ -765,12 +756,16 @@ async function handleMessageLike(chatId, userText, options = {}) {
       ? "Summarise choices; link ECDA/LifeSG/MOM; give next-step checklist."
       : "";
 
-  let aiBody = null,
-    aiLinksRaw = [];
+  // Canonical default only for one-time chip taps
+  const defaultText =
+    chipTag && INTENTS[flow]?.fixed?.[chipTag]
+      ? INTENTS[flow].fixed[chipTag]
+      : null;
+
+  let aiBody = null;
   try {
     const out = await composeAI(flow, userText, chipTag, baseHint);
     aiBody = out.aiBody;
-    aiLinksRaw = out.aiLinksRaw || [];
   } catch (err) {
     if (err.message === "openai_quota") {
       await sendMsg(
@@ -783,7 +778,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
     throw err;
   }
 
-  // If we have a canonical default (only for chip tap), run judge once.
+  // Judge default vs AI (only on chip-tap first hop)
   let finalBody = aiBody;
   if (defaultText) {
     try {
@@ -805,16 +800,29 @@ async function handleMessageLike(chatId, userText, options = {}) {
     }
   }
 
+  // Links
   const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
   const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
+
+  // Disclaimer always
   const reply = `${finalBody}${moreInfo}\n\n_Disclaimer: General info only. For emergencies, call 995._`;
 
+  // Track turns
   const turns = (s.turns || 0) + 1;
+  // Button policy:
+  // - if unknown: always show footer (change/main) to guide user toward main intents
+  // - otherwise: original behavior
   const replyKb =
-    s.flow || options.forcedFlow ? (turns <= 3 ? kbFooter : undefined) : kbMain;
+    flow === "unknown"
+      ? kbFooter
+      : s.flow || options.forcedFlow
+      ? turns <= 3
+        ? kbFooter
+        : undefined
+      : kbMain;
   state.set(chatId, { flow, turns });
 
   await sendMsg(chatId, reply, replyKb);
