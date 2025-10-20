@@ -1,5 +1,5 @@
-// index.js (ESM, Node 18+)
-// npm i express openai dotenv
+// index.js — BabyGPT (Telegram) — ESM, Node 18+
+// deps: npm i express openai dotenv
 import "dotenv/config";
 import express from "express";
 import OpenAI from "openai";
@@ -18,35 +18,175 @@ const TG = (m) => `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${m}`;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const log = (...a) => console.log("[BabyGPT]", ...a);
 
-// per-chat memory (for chosen “flow”)
-const state = new Map(); // chat_id -> { flow?: 'cry'|'nutrition'|'caregiver'|'advice' }
+// Per-chat state
+const state = new Map(); // chatId -> { flow?:string, turns?:number }
 
-// ─────────────────────── Safety & Intent Rules ──────────────────────
+// ───────────────────────────── Safety Rails ─────────────────────────
 const EMERGENCY_RE =
   /(blue lips|not ?breathing|unresponsive|seizure|stiff neck|bulging fontanelle|fever\s?(?:40|4[01])|difficulty breathing)/i;
 const OFFLIMIT_RE =
   /(self[- ]harm|suicide|sexual|violence|illegal|loan|money lending)/i;
 
-const ruleIntent = (t) => {
-  const s = t.toLowerCase();
-  if (/cry|sleep|colic|night waking|won'?t sleep/.test(s))
-    return "healthdev.crying_sleep";
-  if (/solid|wean|milk|feed|recipe|diet|meal/.test(s))
-    return "healthdev.nutrition";
-  if (/milestone|tummy|speech|development/.test(s))
-    return "healthdev.milestones";
-  if (/infantcare|preschool|nanny|babysitter|daycare/.test(s))
-    return "caregiving.find";
-  if (/helper|mdw|maid|work permit|permit/.test(s)) return "caregiving.helper";
-  if (/conflicting|too many opinions|overload/.test(s))
-    return "advice.conflict";
-  if (/overwhelmed|anxious|tired|burnt\s?out/.test(s))
-    return "wellbeing.checkin";
-  if (/help|menu/.test(s)) return "help.anytime";
-  return "unknown";
+// ───────────────────── SG “More information” links ──────────────────
+const SG_DEFAULT_LINKS = {
+  cry: [
+    "https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
+    "https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
+  ],
+  nutrition: [
+    "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
+    "https://www.healthhub.sg/programmes/parent-hub/recipes",
+  ],
+  caregiver: [
+    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.life.gov.sg/services/parenting/preschool",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+  ],
+  advice: [
+    "https://familiesforlife.sg/parenting",
+    "https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
+  ],
+  wellbeing: [
+    "https://www.imh.com.sg/contact-us/Pages/default.aspx",
+    "https://www.sos.org.sg",
+  ],
 };
 
-// ─────────────────────── Helpers: HTTP & Telegram ───────────────────
+// Allowed SG domains to keep (AI links are filtered to these)
+const SG_ALLOWED_HOSTS = [
+  "healthhub.sg",
+  "hpb.gov.sg",
+  "moh.gov.sg",
+  "kkh.com.sg",
+  "ecda.gov.sg",
+  "life.gov.sg",
+  "mom.gov.sg",
+  "imh.com.sg",
+  "sos.org.sg",
+  "gov.sg",
+];
+
+// ───────────────── Intent Taxonomy (flows → chips) ──────────────────
+const INTENTS = {
+  cry: {
+    label: "Crying / Sleep",
+    chips: [
+      { tag: "night", label: "🌙 Night waking" },
+      { tag: "colic", label: "😭 Colic" },
+      { tag: "naps", label: "💤 Naps" },
+      { tag: "bedtime", label: "🧸 Bedtime routine" },
+    ],
+    patterns: {
+      night: /(night|3am|midnight|every\s?night|night\s?waking)/i,
+      colic: /colic|inconsolable|gas\s?pains?/i,
+      naps: /\bnap(s)?\b|day\s?sleep/i,
+      bedtime: /bedtime|wind.?down|routine/i,
+    },
+    fixed: {
+      night: `Night waking basics:\n1) Feed → burp 5–10m.\n2) Dark room + white noise.\n3) Use age-appropriate wake windows.`,
+      colic: `Colic relief (non-medical):\n1) Tummy-down across forearm.\n2) Bicycle legs + gentle tummy massage.\n3) White noise/rocking; brief fresh-air walk.\nSee a GP if vomiting, fever, or poor feeding.`,
+      naps: `Nap tips:\n1) Watch sleepy cues (yawns, glazed look).\n2) Keep consistent nap windows.\n3) Bright mornings, dim afternoons.`,
+      bedtime: `Bedtime routine (20–30m): bath → feed → story → lights out.\nAvoid screens 1h before bed; keep the same steps nightly.`,
+    },
+    aiPrompt: `Give stepwise soothing/sleep guidance. No diagnosis. Mention age-appropriate wake windows.`,
+  },
+
+  nutrition: {
+    label: "Nutrition",
+    chips: [
+      { tag: "solids", label: "🥄 Start solids" },
+      { tag: "milk", label: "🍼 Milk amounts" },
+      { tag: "meals", label: "🍚 Meal ideas" },
+      { tag: "allergy", label: "🥜 Allergies/choking" },
+    ],
+    patterns: {
+      solids: /start(ing)?\s?solids|wean/i,
+      milk: /how much.*milk|ml|oz|formula|breast/i,
+      meals: /meal|menu|recipe|ideas/i,
+      allergy: /allerg(y|ies)|peanut|egg|choke|choking/i,
+    },
+    fixed: {
+      solids: `Starting solids:\n• 6–12m: begin with iron-rich foods daily; 1 new food at a time.\n• Sit upright; supervise; soft textures only.`,
+      milk: `Approx. milk (guide):\n• 0–1m: 60–90ml/feed every 2–3h\n• 1–3m: 90–120ml/feed every 3–4h\n• 4–6m: 120–180ml/feed\n• After solids (6–12m): ~500–700ml/day (overall).`,
+      meals: `Simple meal ideas (6–12m):\n• Porridge with salmon & spinach\n• Mashed sweet potato & tofu\n• Banana oat pancakes (no sugar)`,
+      // allergy → AI better for personalization
+    },
+    aiPrompt: `Give age-appropriate feeding steps; emphasise choking/allergy safety and local SG guidance.`,
+  },
+
+  caregiver: {
+    label: "Caregiving",
+    chips: [
+      { tag: "infantcare", label: "👶 Infantcare" },
+      { tag: "mdw", label: "🧹 Helper / MDW" },
+      { tag: "nanny", label: "👩 Nanny/Babysitter" },
+    ],
+    patterns: {
+      infantcare: /infantcare|preschool|centre|center/i,
+      mdw: /helper|mdw|maid|work\s?permit/i,
+      nanny: /nanny|babysitter/i,
+    },
+    fixed: {
+      infantcare: `Find infantcare (SG):\n1) Search by location & hours.\n2) Visit 2–3 centres; observe hygiene & ratios.\n3) Join waitlist; check subsidies.`,
+      mdw: `Hire a helper (MDW):\n1) Check MOM eligibility; agency vs direct.\n2) Interview; define duties; buy insurance.\n3) IPA → arrival → work permit & orientation.`,
+      nanny: `Nanny/babysitter:\n• Ask for infant CPR/first-aid, references, trial session.\n• Agree on hours, fees, sick-backup plan.\n• Consider infantcare for a structured setting if feasible.`,
+    },
+    aiPrompt: `If area-specific or comparison questions arise, summarise options & next steps; include ECDA/LifeSG/MOM references.`,
+  },
+
+  advice: {
+    label: "Conflicting Advice",
+    chips: [
+      { tag: "evidence", label: "📚 Evidence first" },
+      { tag: "plan", label: "🧭 Pick one plan" },
+      { tag: "family", label: "👨‍👩‍👧 Talk to family" },
+    ],
+    patterns: {
+      evidence: /evidence|research|guidelines|healthhub/i,
+      plan: /pick one|choose|trial/i,
+      family: /grand(ma|pa)|in-laws?|family/i,
+    },
+    aiPrompt: `Resolve conflicting advice: cite HealthHub guidance, choose one approach, trial 3–5 days, review respectfully with family.`,
+  },
+};
+
+// ───────────────────── Keyboards (Main / Context / Footer) ───────────────────
+const kbMain = {
+  inline_keyboard: Object.entries(INTENTS).map(([flow, cfg]) => [
+    {
+      text:
+        (flow === "cry"
+          ? "🍼 "
+          : flow === "nutrition"
+          ? "🥣 "
+          : flow === "caregiver"
+          ? "👩‍🍼 "
+          : "🧭 ") + cfg.label,
+      callback_data: `flow:${flow}`,
+    },
+  ]),
+};
+const kbContext = (flow) => ({
+  inline_keyboard: [
+    ...INTENTS[flow].chips.map((c) => [
+      { text: c.label, callback_data: `chip:${flow}:${c.tag}` },
+    ]),
+    [
+      { text: "🔄 Change topic", callback_data: "nav:change" },
+      { text: "🏠 Main menu", callback_data: "nav:home" },
+    ],
+  ],
+});
+const kbFooter = {
+  inline_keyboard: [
+    [
+      { text: "🔄 Change topic", callback_data: "nav:change" },
+      { text: "🏠 Main menu", callback_data: "nav:home" },
+    ],
+  ],
+};
+
+// ───────────────────── Helpers: HTTP & Telegram ─────────────────────
 async function safeFetch(url, opts = {}, label = "fetch") {
   try {
     log(`→ ${label}: ${url}`);
@@ -59,7 +199,6 @@ async function safeFetch(url, opts = {}, label = "fetch") {
     return null;
   }
 }
-
 const sendMsg = (chat_id, text, keyboard, label = "sendMessage") =>
   safeFetch(
     TG("sendMessage"),
@@ -76,7 +215,6 @@ const sendMsg = (chat_id, text, keyboard, label = "sendMessage") =>
     },
     label
   );
-
 const answerCbq = (id, label = "answerCallbackQuery") =>
   safeFetch(
     TG("answerCallbackQuery"),
@@ -88,59 +226,26 @@ const answerCbq = (id, label = "answerCallbackQuery") =>
     label
   );
 
-// ───────────────────── SG “More information” links ──────────────────
-const SG_LINKS = {
-  "healthdev.crying_sleep": [
-    "HealthHub (Sleep Basics): https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
-    "KKH Baby Sleep Guide: https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
-  ],
-  "healthdev.nutrition": [
-    "HealthHub (Healthy Diet 0–3): https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
-    "HPB Recipes: https://www.healthhub.sg/programmes/parent-hub/recipes",
-  ],
-  "healthdev.milestones": [
-    "KKH Developmental Milestones: https://www.kkh.com.sg/healtharticles/developmental-milestones",
-  ],
-  "caregiving.find": [
-    "ECDA Preschool / Infantcare Search: https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
-    "LifeSG Preschool Services: https://www.life.gov.sg/services/parenting/preschool",
-  ],
-  "caregiving.helper": [
-    "MOM Work Permit (MDW): https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
-    "Apply for MDW Permit: https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker/apply",
-  ],
-  "advice.conflict": [
-    "Families for Life (Parenting): https://familiesforlife.sg/parenting",
-    "HealthHub Parenting Tips: https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
-  ],
-  "wellbeing.checkin": [
-    "IMH Helpline (24h): 6389 2222",
-    "SOS (Samaritans of SG): 1767",
-  ],
-};
+// ───────────────────── URL extraction & SG filter ───────────────────
+function extractUrls(text = "") {
+  const urls = Array.from(new Set(text.match(/https?:\/\/[^\s)\]]+/g) || []));
+  return urls;
+}
+function isAllowedSG(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return SG_ALLOWED_HOSTS.some((dom) => h === dom || h.endsWith(`.${dom}`));
+  } catch {
+    return false;
+  }
+}
+function mergeSgLinks(defaultLinks = [], aiLinks = []) {
+  const filtered = [...defaultLinks, ...aiLinks.filter(isAllowedSG)];
+  const unique = Array.from(new Set(filtered));
+  return unique.slice(0, 6); // keep it tight
+}
 
-// ───────────── Static blocks used for instant deterministic replies ──────────
-const blockInfantcare = () =>
-  `Steps to find infantcare (SG):
-1) Use ECDA/LifeSG to shortlist by location, hours, fees.
-2) Visit 2–3 centres: hygiene, caregiver interaction, routine.
-3) Join waitlist; ask about subsidies & transition.
-*More information:*
-• ECDA: https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx
-• LifeSG: https://www.life.gov.sg/services/parenting/preschool
-\n_Disclaimer: General info only. For emergencies, call 995._`;
-
-const blockHelper = () =>
-  `Hire a helper (MDW) in SG:
-1) Check MOM eligibility; agency vs direct-hire.
-2) Interview; verify experience; define duties in writing.
-3) Insurance; IPA → arrival → permit & orientation.
-*More information:*
-• MOM Work Permit (MDW): https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker
-• Apply: https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker/apply
-\n_Disclaimer: General info only. For emergencies, call 995._`;
-
-// ─────────────── OpenAI wrappers (quota → [debug] message) ───────────────
+// ───────────────────── OpenAI helpers & judge ───────────────────────
 async function callOpenAI(fn, label) {
   try {
     return await fn();
@@ -151,41 +256,90 @@ async function callOpenAI(fn, label) {
       msg.includes("insufficient_quota") ||
       msg.includes("billing_hard_limit") ||
       msg.includes("You exceeded")
-    )
+    ) {
       throw new Error("openai_quota");
+    }
     throw err;
   }
 }
 
-async function classifyIntentLLM(text) {
-  log("→ classifyIntentLLM input:", text);
-  return callOpenAI(async () => {
-    const schema = {
-      name: "IntentClassification",
-      schema: {
-        type: "object",
-        properties: {
-          intent: {
-            type: "string",
-            enum: [
-              "healthdev.crying_sleep",
-              "healthdev.nutrition",
-              "healthdev.milestones",
-              "caregiving.find",
-              "caregiving.helper",
-              "advice.conflict",
-              "wellbeing.checkin",
-              "help.anytime",
-              "escalation.emergency",
-              "unknown",
-            ],
-          },
-          confidence: { type: "number" },
-        },
-        required: ["intent", "confidence"],
-        additionalProperties: false,
+// 1) Generate AI reply (no links appended here)
+async function composeAI(flow, userText, chipTag = null, baseHint = "") {
+  const system = `You are BabyGPT (Singapore). Short step-by-step guidance first, then one friendly line. ≤180 words.
+No diagnosis. Emergencies → call 995. Prefer SG official links. Audience: first-time parents of newborns/toddlers.`;
+  const rules = `House rules:
+- Be concise and practical (steps 1-3).
+- Use Singapore context (HealthHub, ECDA, MOM).
+- Avoid medical claims; recommend GP/995 if urgent.
+- Warm tone, not prescriptive.`;
+
+  const chipHint = chipTag ? `Subtopic focus: ${chipTag}.` : "";
+  const styleHint = INTENTS[flow]?.aiPrompt || "";
+
+  const prompt = `User message:
+"""${userText}"""
+
+Context:
+- Flow: ${flow}
+- ${chipHint}
+- ${styleHint}
+- Base hint: ${baseHint}`;
+
+  const text = await callOpenAI(async () => {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: system },
+        { role: "system", content: rules },
+        { role: "user", content: prompt },
+      ],
+    });
+    return (
+      r.choices[0].message.content?.trim() || "Here are some steps you can try."
+    );
+  }, "composeAI");
+
+  // return AI body + any SG links detected in it (filtered later)
+  return { aiBody: text, aiLinksRaw: extractUrls(text) };
+}
+
+// 2) Judge: compare default vs AI and return which is better + confidence
+async function judgeAnswers({ flow, userText, defaultText, aiText }) {
+  const schema = {
+    name: "AnswerJudge",
+    schema: {
+      type: "object",
+      properties: {
+        better: { type: "string", enum: ["default", "ai"] },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
+        reason: { type: "string" },
       },
-    };
+      required: ["better", "confidence", "reason"],
+      additionalProperties: false,
+    },
+  };
+  const judgePrompt = `Evaluate which answer better serves a new parent in Singapore.
+
+Criteria (in order):
+1) Accuracy and safety for newborn care (no diagnosis).
+2) Local relevance (SG context, cite SG sources if any).
+3) Clarity and actionability (step-first).
+4) Brevity (≤180 words is good).
+
+Return JSON only.
+
+User:
+"""${userText}"""
+Flow: ${flow}
+
+Default (canonical) answer:
+"""${defaultText}"""
+
+AI generated answer:
+"""${aiText}"""`;
+
+  const result = await callOpenAI(async () => {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,
@@ -194,65 +348,46 @@ async function classifyIntentLLM(text) {
         {
           role: "system",
           content:
-            "Classify the user message into exactly one intent. Emergencies → escalation.emergency. Return JSON only.",
+            "You are an impartial judge. Compare two answers and pick the better one with a confidence score 0–1.",
         },
-        { role: "user", content: text },
+        { role: "user", content: judgePrompt },
       ],
     });
-    const parsed = JSON.parse(r.choices[0].message.content);
-    log("← classifyIntentLLM result:", parsed);
-    return parsed;
-  }, "classifyIntentLLM");
+    return JSON.parse(r.choices[0].message.content);
+  }, "judgeAnswers");
+
+  return result; // {better, confidence, reason}
 }
 
-async function composeAI(intent, text, baseSteps = "") {
-  log("→ composeAI intent:", intent, "| text:", text);
-  return callOpenAI(async () => {
-    const system = `You are BabyGPT (Singapore). Provide step-by-step guidance first, then one friendly sentence. ≤180 words.
-No diagnosis. Emergencies → call 995. Prefer SG official resources. Intent: ${intent}`;
-
-    const user = `User: ${text}
-Base steps (may be empty):
-${baseSteps}`;
-
-    const resp = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    });
-    let out =
-      resp.choices[0].message.content?.trim() ||
-      "Let’s take this step by step.";
-
-    // Append “More information” links automatically
-    const refs = SG_LINKS[intent] || [];
-    if (refs.length) {
-      out += "\n\n*More information:*\n" + refs.map((x) => `• ${x}`).join("\n");
-    }
-    return (
-      out + "\n\n_Disclaimer: General info only. For emergencies, call 995._"
-    );
-  }, "composeAI");
+// ───────────────────── Intent Matching Helpers ──────────────────────
+function matchChipByRegex(flow, text) {
+  const cfg = INTENTS[flow];
+  if (!cfg?.patterns) return null;
+  for (const [tag, re] of Object.entries(cfg.patterns)) {
+    if (re.test(text)) return tag;
+  }
+  return null;
+}
+function ruleIntentTop(text) {
+  const s = text.toLowerCase();
+  if (/cry|sleep|colic|night waking|won'?t sleep/.test(s)) return "cry";
+  if (/solid|wean|milk|feed|recipe|diet|meal/.test(s)) return "nutrition";
+  if (
+    /infantcare|preschool|nanny|babysitter|daycare|helper|mdw|maid|permit/.test(
+      s
+    )
+  )
+    return "caregiver";
+  if (/conflicting|too many opinions|overload/.test(s)) return "advice";
+  if (/overwhelmed|anxious|tired|burnt\s?out/.test(s)) return "wellbeing";
+  if (/help|menu/.test(s)) return "help";
+  return "unknown";
 }
 
-// ─────────────────────────── Telegram UI ────────────────────────────
-const keyboard = {
-  inline_keyboard: [
-    [{ text: "🍼 Crying / Sleep", callback_data: "flow:cry" }],
-    [{ text: "🥣 Nutrition", callback_data: "flow:nutrition" }],
-    [{ text: "👩‍🍼 Caregiving", callback_data: "flow:caregiver" }],
-    [{ text: "🧭 Conflicting Advice", callback_data: "flow:advice" }],
-  ],
-};
-
-// ─────────────────────────── Webhook Handler ─────────────────────────
+// ───────────────────── Telegram Webhook Handler ─────────────────────
 app.post("/telegram/webhook", async (req, res) => {
   res.sendStatus(200);
   const upd = req.body;
-
   const type = upd.callback_query
     ? "callback_query"
     : upd.message
@@ -264,58 +399,72 @@ app.post("/telegram/webhook", async (req, res) => {
   log("🧾 update raw:", JSON.stringify(upd).slice(0, 1200));
 
   try {
-    // 1) Inline button taps
+    // Inline button taps
     if (upd.callback_query) {
       const cq = upd.callback_query;
       const chatId = cq.message.chat.id;
       const data = cq.data || "";
-      log("🧲 callback_query payload:", { chatId, data });
+      log("🧲 callback_query:", { chatId, data });
 
-      await answerCbq(cq.id); // ACK to stop spinner
+      await answerCbq(cq.id);
 
       if (data.startsWith("flow:")) {
-        const flow = data.split(":")[1]; // cry|nutrition|caregiver|advice
-        state.set(chatId, { flow });
-        log(`💬 set flow=${flow} for chat ${chatId}`);
-
+        const flow = data.split(":")[1];
+        state.set(chatId, { flow, turns: 0 });
         const promptMap = {
           cry: "Tell me the crying/sleep details (age + when it happens).",
           nutrition:
-            "Ask about feeding (milk amounts, starting solids, meal ideas).",
+            "What’s your feeding concern? (starting solids, milk amounts, meal ideas)",
           caregiver:
-            "What caregiver do you need? (infantcare, helper/MDW, nanny/babysitter) and area?",
+            "Which caregiver do you need? (infantcare, helper/MDW, nanny) & your area?",
           advice:
             "What conflicting advice are you getting? I’ll help you pick a plan.",
         };
-        const breadcrumb = `\n\n_Current topic: ${flow.toUpperCase()} • tap another button to change._`;
         await sendMsg(
           chatId,
-          `${promptMap[flow]}${breadcrumb}`,
-          { inline_keyboard: keyboard.inline_keyboard },
-          "sendMessage(prompt-after-flow)"
+          `${promptMap[flow]}\n\n_Current topic: ${flow.toUpperCase()}._`,
+          kbContext(flow),
+          "send(context)"
         );
+        return;
+      }
+
+      if (data.startsWith("chip:")) {
+        const [, flow, tag] = data.split(":"); // e.g. chip:cry:night
+        // Synthesize a short user text to route through the same logic
+        const syn = `${flow} ${tag}`; // minimal hint
+        await handleMessageLike(chatId, syn, {
+          forcedFlow: flow,
+          forcedTag: tag,
+        });
+        return;
+      }
+
+      if (data === "nav:home") {
+        state.delete(chatId);
+        await sendMsg(chatId, "Main menu:", kbMain, "send(home)");
+        return;
+      }
+      if (data === "nav:change") {
+        state.delete(chatId);
+        await sendMsg(
+          chatId,
+          "Changing topic. What would you like help with now?",
+          kbMain,
+          "send(change)"
+        );
+        return;
       }
       return;
     }
 
-    // 2) Messages
+    // Messages
     const m = upd.message || upd.edited_message;
     if (!m?.text) return;
     const chatId = m.chat.id;
     const text = m.text.trim();
     log(`📩 msg from ${chatId}:`, text);
 
-    // Map reply-keyboard texts (in case some clients send label text)
-    if (/^\s*🍼?\s*Crying\s*\/\s*Sleep\s*$/i.test(text))
-      state.set(chatId, { flow: "cry" });
-    if (/^\s*🥣?\s*Nutrition\s*$/i.test(text))
-      state.set(chatId, { flow: "nutrition" });
-    if (/^\s*👩‍🍼?\s*Caregiving\s*$/i.test(text))
-      state.set(chatId, { flow: "caregiver" });
-    if (/Conflicting.*Advice/i.test(text))
-      state.set(chatId, { flow: "advice" });
-
-    // /start intro
     if (text === "/start") {
       state.delete(chatId);
       const intro = `
@@ -324,28 +473,21 @@ Your friendly companion for first-time parents of babies aged 0–3.
 
 I can help with:
 1️⃣ *Health & Development* — sleep/crying, feeding & nutrition, milestones  
-2️⃣ *Caregiving Support* — infantcare & nanny/helper info, and resolving conflicting advice  
-3️⃣ *Parental Wellbeing* — gentle pointers for self-care
+2️⃣ *Caregiving Support* — infantcare & helper info, and resolving conflicting advice  
+3️⃣ *Parental Wellbeing* — gentle self-care pointers
 
-I’m not a medical professional, but I’ll summarise steps and include trusted SG resources like HealthHub, ECDA, MOM.
-
+I’m not a medical professional, but I’ll summarise steps and include trusted SG resources (HealthHub, ECDA, MOM).
 *What would you like help with today?* 👇
       `;
-      await sendMsg(
-        chatId,
-        intro.trim(),
-        { inline_keyboard: keyboard.inline_keyboard },
-        "sendMessage(/start)"
-      );
+      await sendMsg(chatId, intro.trim(), kbMain, "send(/start)");
       return;
     }
 
-    // Safety
     if (EMERGENCY_RE.test(text)) {
       await sendMsg(
         chatId,
         "⚠️ This may be urgent. Please call 995 or go to the nearest A&E now.",
-        { inline_keyboard: keyboard.inline_keyboard }
+        kbMain
       );
       return;
     }
@@ -353,88 +495,114 @@ I’m not a medical professional, but I’ll summarise steps and include trusted
       await sendMsg(
         chatId,
         "Sorry, I can’t assist with that topic. If you feel unsafe, call SOS (1767) or IMH (6389 2222).",
-        { inline_keyboard: keyboard.inline_keyboard }
+        kbMain
       );
       return;
     }
 
-    // Intent detection (regex → LLM fallback)
-    let intent = ruleIntent(text);
-    log("🔍 regex intent:", intent);
-    if (intent === "unknown") {
-      try {
-        const { intent: li } = await classifyIntentLLM(text);
-        intent = li;
-      } catch (err) {
-        if (err.message === "openai_quota") {
-          await sendMsg(
-            chatId,
-            "[debug] OpenAI API quota exceeded – please check API credits.",
-            { inline_keyboard: keyboard.inline_keyboard }
-          );
-          return;
-        }
-        throw err;
-      }
-    }
-
-    // Respect currently selected flow
-    const flow = state.get(chatId)?.flow;
-    if (flow) log(`💾 active flow=${flow}`);
-    if (flow === "cry") intent = "healthdev.crying_sleep";
-    if (flow === "nutrition") intent = "healthdev.nutrition";
-    if (flow === "caregiver")
-      intent = /(helper|mdw|maid|permit)/i.test(text)
-        ? "caregiving.helper"
-        : "caregiving.find";
-    if (flow === "advice") intent = "advice.conflict";
-    log("🎯 final intent:", intent, "| input:", text);
-
-    // Route
-    if (intent === "caregiving.find") {
-      await sendMsg(chatId, blockInfantcare(), {
-        inline_keyboard: keyboard.inline_keyboard,
-      });
-      return;
-    }
-    if (intent === "caregiving.helper") {
-      await sendMsg(chatId, blockHelper(), {
-        inline_keyboard: keyboard.inline_keyboard,
-      });
-      return;
-    }
-
-    const base =
-      intent === "healthdev.nutrition"
-        ? "0–6m: milk on demand; 6–12m: start solids (iron-rich daily, one new food at a time); >12m: family meals; avoid choking."
-        : intent === "healthdev.crying_sleep"
-        ? "Soothing: feed → burp 5–10 min → swaddle + white noise → dim lights. Keep age-appropriate wake windows."
-        : intent === "advice.conflict"
-        ? "Resolver: 1) Prefer HealthHub guidance 2) Pick one approach that fits family 3) Try for 3–5 days, then review."
-        : intent === "healthdev.milestones"
-        ? "Steady progress: motor (tummy time), language (babble→words), social (smiles→joint attention). See GP if worried."
-        : intent === "wellbeing.checkin"
-        ? "2–5 min reset: box breathing 4-4-4-4; choose one tiny win for today; ask for help when needed."
-        : "";
-
-    try {
-      const out = await composeAI(intent, text, base);
-      await sendMsg(chatId, out, { inline_keyboard: keyboard.inline_keyboard });
-    } catch (err) {
-      if (err.message === "openai_quota") {
-        await sendMsg(
-          chatId,
-          "[debug] OpenAI API quota exceeded – please check API credits.",
-          { inline_keyboard: keyboard.inline_keyboard }
-        );
-        return;
-      }
-      throw err;
-    }
+    await handleMessageLike(chatId, text);
   } catch (err) {
     log("🔥 webhook handler error:", err);
   }
 });
+
+// ───────────────────── Core message routing (with judge) ─────────────────────
+async function handleMessageLike(chatId, userText, options = {}) {
+  const s = state.get(chatId) || {};
+  let flow = options.forcedFlow || s.flow || ruleIntentTop(userText);
+  if (flow === "help") {
+    await sendMsg(chatId, "Choose a topic:", kbMain);
+    return;
+  }
+  if (flow === "unknown") {
+    // fallback to default flow (nutrition) to reduce friction
+    flow = "nutrition";
+  }
+
+  // within a flow, detect chip tag
+  let chipTag = options.forcedTag || matchChipByRegex(flow, userText);
+
+  // Fixed default (if any)
+  const defaultText =
+    chipTag && INTENTS[flow]?.fixed?.[chipTag]
+      ? INTENTS[flow].fixed[chipTag]
+      : null;
+
+  // Determine base hint for AI
+  const baseHint =
+    flow === "nutrition"
+      ? "0–6m: milk on demand; 6–12m: start iron-rich solids; >12m: family meals; avoid choking."
+      : flow === "cry"
+      ? "Soothing: feed → burp → swaddle + white noise → dim lights; keep age-appropriate wake windows."
+      : flow === "advice"
+      ? "Resolver: 1) Prefer HealthHub guidance 2) Pick one approach 3) Trial 3–5 days, then review."
+      : flow === "caregiver"
+      ? "Summarise options; point to ECDA/LifeSG/MOM; give next-step checklist."
+      : "";
+
+  // Compose AI answer (and capture any links it mentions)
+  let aiBody = null,
+    aiLinksRaw = [];
+  try {
+    const out = await composeAI(flow, userText, chipTag, baseHint);
+    aiBody = out.aiBody;
+    aiLinksRaw = out.aiLinksRaw || [];
+  } catch (err) {
+    if (err.message === "openai_quota") {
+      await sendMsg(
+        chatId,
+        "[debug] OpenAI API quota exceeded – please check API credits.",
+        kbFooter
+      );
+      return;
+    }
+    throw err;
+  }
+
+  // Decide: default vs AI (judge), if defaultText exists
+  let finalBody = aiBody;
+  if (defaultText) {
+    try {
+      const verdict = await judgeAnswers({
+        flow,
+        userText,
+        defaultText,
+        aiText: aiBody,
+      });
+      log("🧪 judge verdict:", verdict);
+      const useAI = verdict.better === "ai" && verdict.confidence >= 0.65;
+      finalBody = useAI ? aiBody : defaultText;
+    } catch (err) {
+      if (err.message === "openai_quota") {
+        // If judge failed due to quota, fall back to safe default
+        finalBody = defaultText;
+      } else {
+        log("⚠️ judge error, using default:", err.message);
+        finalBody = defaultText;
+      }
+    }
+  }
+
+  // Build “More information” links:
+  //  - start with canonical flow links
+  //  - add any SG-only links the AI provided
+  const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
+  const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
+  const moreInfo = mergedLinks.length
+    ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
+    : "";
+
+  // Always add disclaimer at the end
+  const reply = `${finalBody}${moreInfo}\n\n_Disclaimer: General info only. For emergencies, call 995._`;
+
+  // Track turns & footer
+  const turns = (s.turns || 0) + 1;
+  const replyKb =
+    s.flow || options.forcedFlow ? (turns <= 3 ? kbFooter : undefined) : kbMain;
+  state.set(chatId, { flow, turns });
+
+  await sendMsg(chatId, reply, replyKb);
+}
 
 // ───────────────────────── Health & Webhook setup ───────────────────
 app.get("/health", (_req, res) => res.status(200).send("ok"));
