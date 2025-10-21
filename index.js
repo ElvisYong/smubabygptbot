@@ -808,7 +808,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
     : "";
 
   // Disclaimer always
-  const reply = `${finalBody}${moreInfo}\n\n_Disclaimer: General info only. For emergencies, call 995._`;
+  const reply = `${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;

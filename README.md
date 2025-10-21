@@ -26,19 +26,21 @@ BabyGPT focuses on **providing accurate information and practical steps** rather
 ## ✨ Flow v2 — What changed
 
 - **Main menu + chips UI**: After choosing a topic (Cry, Nutrition, Caregiving, Conflicting Advice), you get context-specific chips (subtopics) to narrow the request.
-- **Answer Judge**: For some chips, the bot has a short, canonical default answer. It also generates an AI answer, then uses a judge to pick the better one (threshold 0.65). If judging fails, it falls back safely.
+- **Answer Judge (on chip taps only)**: For some chips, the bot has a short, canonical default answer. It also generates an AI answer, then uses a judge to pick the better one (threshold 0.65). Free-typed follow-ups go AI-first without judging.
 - **SG link policy**: AI-proposed links are filtered to whitelisted SG domains and merged with curated defaults for the selected flow.
 - **Turn-aware footer**: A compact footer with navigation shows for the first few turns in a flow.
+- **Tips menu + Type-your-own**: Per-flow quick tips and an explicit "💬 Type my own question" option.
+- **Unknown-friendly persona**: When the message doesn’t fit any flow, the bot answers gently (no diagnosis) and shows basic navigation.
 
 ## 🚀 Quick Start
 
-1) Install dependencies:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-2) Create `.env` (no trailing slash in `PUBLIC_URL`):
+2. Create `.env` (no trailing slash in `PUBLIC_URL`):
 
 ```env
 OPENAI_API_KEY=sk-...
@@ -47,7 +49,7 @@ PUBLIC_URL=https://your-domain-or-tunnel
 PORT=3000
 ```
 
-3) Start the server (dev with watch or prod):
+3. Start the server (dev with watch or prod):
 
 ```bash
 npm run dev
@@ -55,7 +57,7 @@ npm run dev
 npm start
 ```
 
-4) Expose your server (local dev example):
+4. Expose your server (local dev example):
 
 ```bash
 ngrok http 3000
@@ -64,13 +66,13 @@ ngrok http 3000
 
 On boot, if both `PUBLIC_URL` and `TELEGRAM_BOT_TOKEN` are set, the server auto-configures the Telegram webhook to `PUBLIC_URL/telegram/webhook` with `allowed_updates = ["message","callback_query","edited_message"]`.
 
-5) Verify health:
+5. Verify health:
 
 ```bash
 curl -s http://localhost:3000/health
 ```
 
-6) In Telegram, open your bot and send `/start`.
+6. In Telegram, open your bot and send `/start`.
 
 ---
 
@@ -87,9 +89,9 @@ curl -s http://localhost:3000/health
 
 ## 🧠 System Architecture
 
-1. **Telegram Bot** – Main user interface; inline buttons for topical flows.  
-2. **Express.js Server** – Handles Telegram webhook events, routes intents, and applies safety filters.  
-3. **OpenAI API** – Used for intelligent summarization, advice, and contextual understanding.  
+1. **Telegram Bot** – Main user interface; inline buttons for topical flows.
+2. **Express.js Server** – Handles Telegram webhook events, routes intents, and applies safety filters.
+3. **OpenAI API** – Used for intelligent summarization, advice, and contextual understanding.
 4. **Fallback Rules** – Regex-based intent detection and static guidance if AI is unavailable.
 
 Endpoints:
@@ -116,10 +118,10 @@ Endpoints:
 
 ### Response Composition
 
-1) Compose: The bot calls OpenAI (`gpt-4o-mini`) to compose concise, step-first guidance (≤180 words). System rules emphasise SG context and safety.
-2) Judge (when a canonical default exists): Compares canonical vs AI answer and selects the better one if `confidence ≥ 0.65`. If the judge errors (e.g., quota), it uses the canonical default.
-3) Links: Extracts URLs from the AI answer, filters to SG whitelisted hosts, and merges with curated defaults per flow.
-4) Footer & turns: Shows a small nav footer for the first few turns within a flow; always appends the safety disclaimer.
+1. Compose: The bot calls OpenAI (`gpt-4o-mini`) to compose concise, step-first guidance (≤180 words). System rules emphasise SG context and safety.
+2. Judge (when a canonical default exists): Compares canonical vs AI answer and selects the better one if `confidence ≥ 0.65`. If the judge errors (e.g., quota), it uses the canonical default.
+3. Links: Extracts URLs from the AI answer, filters to SG whitelisted hosts, and merges with curated defaults per flow.
+4. Footer & turns: Shows a small nav footer for the first few turns within a flow; always appends the safety disclaimer.
 
 ---
 
@@ -130,8 +132,10 @@ Endpoints:
   - 🥣 Nutrition (`nutrition`)
   - 👩‍🍼 Caregiving (`caregiver`)
   - 🧭 Conflicting Advice (`advice`)
-- **Context chips** per flow (examples below) to quickly specialise the topic.
+- **Context chips** per flow (examples below) to quickly specialise the topic. The Cry flow chips are now: `🌙 Wakes at night`, `😣 Gas / tummy discomfort`, `💤 Day naps`, `🧸 Bedtime routine`.
 - **Navigation**: `🏠 Main menu` and `🔄 Change topic` buttons are always available in the context UI, and a compact footer shows during early turns.
+- **Tips menu**: Each flow includes a `💡 Tips` submenu with 2–3 quick references.
+- **Type-your-own**: `💬 Type my own question` lets users free-type; follow-ups are AI-first.
 
 ---
 
@@ -140,9 +144,11 @@ Endpoints:
 BabyGPT’s logic follows **structured conversation flows**, ensuring users stay within safe and relevant topics.
 
 ### 🌟 Starting Point
+
 **Trigger:** `/start`
 
 **Response:**
+
 > “Hi! I'm BabyGPT (Singapore Edition) — your friendly companion for first-time parents of babies aged 0–3.  
 > I can help with:  
 > 1️⃣ Health & Development – sleep, crying, feeding, milestones  
@@ -150,17 +156,18 @@ BabyGPT’s logic follows **structured conversation flows**, ensuring users stay
 > 3️⃣ Parental Wellbeing – gentle self-care tips”
 
 **User chooses** from inline buttons:
-- 🍼 Crying / Sleep  
-- 🥣 Nutrition  
-- 👩‍🍼 Caregiving  
+
+- 🍼 Crying / Sleep
+- 🥣 Nutrition
+- 👩‍🍼 Caregiving
 - 🧭 Conflicting Advice
 
 ---
 
 ### 🧠 Flows, Chips, and Canonical Content
 
-- **Cry / Sleep (`cry`)** chips: `night`, `colic`, `naps`, `bedtime`
-  - Canonical snippets exist for all four chips (short, step-first guidance)
+- **Cry / Sleep (`cry`)** chips: `night`, `gas`, `naps`, `bedtime`
+  - Canonical snippets exist for all four chips (short, step-first guidance). The `gas` chip covers tummy discomfort/strong crying (non-diagnostic).
   - Default SG links merged in: HealthHub Sleep Basics, KKH Sleep Guide
 - **Nutrition (`nutrition`)** chips: `solids`, `milk`, `meals`, `allergy`
   - Canonical snippets exist for `solids`, `milk`, `meals` (AI handles `allergy`)
@@ -170,6 +177,7 @@ BabyGPT’s logic follows **structured conversation flows**, ensuring users stay
 - **Conflicting Advice (`advice`)** chips: `evidence`, `plan`, `family`
   - No canonical snippet; AI composes with rules to cite SG guidance and propose a trial plan
 - Recognised via text (not a button): **`wellbeing`** — AI composes short wellbeing tips; links: IMH, SOS
+- For unknown topics, the bot replies with a gentle, supportive persona and basic navigation.
 
 Judge selection runs only when a canonical snippet exists for the chosen chip.
 
@@ -178,14 +186,16 @@ Judge selection runs only when a canonical snippet exists for the chosen chip.
 ## 🗺️ Dialog Flow Examples
 
 ### Example: Crying & Sleep Path
+
 User: /start  
 Bot shows main menu (Cry / Nutrition / Caregiving / Conflicting Advice)  
-⬇️ User taps “🍼 Crying / Sleep” → chips appear (`🌙 Night waking`, `😭 Colic`, `💤 Naps`, `🧸 Bedtime routine`)  
-⬇️ User taps `😭 Colic`  
-Bot composes an AI answer, compares with the canonical colic snippet (judge threshold 0.65), and sends the better one.  
+⬇️ User taps “🍼 Crying / Sleep” → chips appear (`🌙 Wakes at night`, `😣 Gas / tummy discomfort`, `💤 Day naps`, `🧸 Bedtime routine`)  
+⬇️ User taps `😣 Gas / tummy discomfort`  
+Bot composes an AI answer, compares with the canonical gas snippet (judge threshold 0.65), and sends the better one.  
 Bot appends curated SG links and the standard disclaimer.
 
 ### Example: Caregiver Search Path
+
 User: /start → taps 👩‍🍼 Caregiving  
 Chips: `👶 Infantcare`, `🧹 Helper / MDW`, `👩 Nanny/Babysitter`  
 ⬇️ User taps `👶 Infantcare`  
@@ -199,13 +209,15 @@ Bot replies with a concise checklist (canonical vs AI judged) and adds ECDA/Life
 - Scripts: `npm run dev` (watch), `npm start`
 - Express v5.x; Node 18+ global `fetch` is used (no extra polyfill)
 - Inline keyboards: main menu + per-flow chips; small footer appears for early turns within a flow
+- Telegram API calls use a retry wrapper (up to 50 attempts) with exponential backoff and support for `Retry-After`; only 429/5xx are retried.
 
 ---
 
 ## 🔗 SG Links Policy
 
-- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`.
+- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`.
 - Curated default links per flow are always preferred; filtered AI links are merged on top, deduplicated, and trimmed.
+- Unknown flow has safe defaults referencing Families for Life and HealthHub overview pages.
 - All replies end with: `_Disclaimer: General info only. For emergencies, call 995._`
 
 ---
