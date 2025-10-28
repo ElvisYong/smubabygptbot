@@ -443,36 +443,22 @@ async function callOpenAI(fn, label) {
 
 // 1) Generate AI reply (no links appended here)
 async function composeAI(flow, userText, chipTag = null, baseHint = "") {
-  let system = `You are BabyGPT (Singapore). Short, clear steps first, then one friendly line. ≤180 words.
-No diagnosis. Emergencies → call 995. Prefer SG official links. Audience: first-time parents of newborns/toddlers.`;
+  const system = `You are a friendly parenting helper. Keep it light, conversational, and generally helpful. Share a few ideas that might help. Keep it concise.`;
+  const rules = `Guidelines:
+- Be friendly and encouraging.
+- Share general suggestions or tips.
+- Keep it reasonably short when possible.`;
 
-  // Gentle, respectful fallback persona for unknown topics
-  if (flow === "unknown") {
-    system = `You are BabyGPT (Singapore), a warm, respectful parenting assistant.
-Be kind, non-judgmental, and supportive. Avoid diagnosis or medical claims.
-Offer gentle encouragement, practical next steps, or simple resources when appropriate. Keep it ≤180 words.`;
-  }
-
-  const rules = `House rules:
-- Use simple, friendly language.
-- Singapore context (HealthHub, ECDA, MOM) when giving resources.
-- Encourage seeing a GP for health concerns; emergencies → 995.`;
-
-  const chipHint = chipTag ? `Subtopic focus: ${chipTag}.` : "";
-  const styleHint = INTENTS[flow]?.aiPrompt || "";
   const prompt = `User message:
 """${userText}"""
 
 Context:
-- Flow: ${flow}
-- ${chipHint}
-- ${styleHint}
-- Base hint: ${baseHint}`;
+- Topic: ${flow}`;
 
   const text = await callOpenAI(async () => {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.3,
+      temperature: 0.8,
       messages: [
         { role: "system", content: system },
         { role: "system", content: rules },
@@ -480,67 +466,14 @@ Context:
       ],
     });
     return (
-      r.choices[0].message.content?.trim() || "Here are some steps you can try."
+      r.choices[0].message.content?.trim() || "Here are some ideas you can try."
     );
   }, "composeAI");
 
   return { aiBody: text, aiLinksRaw: extractUrls(text) };
 }
 
-// 2) Judge: compare default vs AI and return which is better + confidence
-async function judgeAnswers({ flow, userText, defaultText, aiText }) {
-  const schema = {
-    name: "AnswerJudge",
-    schema: {
-      type: "object",
-      properties: {
-        better: { type: "string", enum: ["default", "ai"] },
-        confidence: { type: "number", minimum: 0, maximum: 1 },
-        reason: { type: "string" },
-      },
-      required: ["better", "confidence", "reason"],
-      additionalProperties: false,
-    },
-  };
-  const judgePrompt = `Evaluate which answer better serves a new parent in Singapore.
-
-Criteria (in order):
-1) Accuracy and safety for newborn care (no diagnosis).
-2) Local relevance (SG context, use SG sources).
-3) Clarity and actionability (simple steps first).
-4) Brevity (≤180 words is good).
-
-Return JSON only.
-
-User:
-"""${userText}"""
-Flow: ${flow}
-
-Default (canonical) answer:
-"""${defaultText}"""
-
-AI generated answer:
-"""${aiText}"""`;
-
-  const result = await callOpenAI(async () => {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      response_format: { type: "json_schema", json_schema: schema },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are an impartial judge. Compare two answers, pick the better one and give a confidence 0–1.",
-        },
-        { role: "user", content: judgePrompt },
-      ],
-    });
-    return JSON.parse(r.choices[0].message.content);
-  }, "judgeAnswers");
-
-  return result; // {better, confidence, reason}
-}
+// (Judge removed in this branch to demonstrate weaker rules)
 
 // ───────────────────── Intent Matching Helpers ──────────────────────
 function ruleIntentTop(text) {
@@ -756,7 +689,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
       ? "Summarise choices; link ECDA/LifeSG/MOM; give next-step checklist."
       : "";
 
-  // Canonical default only for one-time chip taps
+  // Canonical defaults exist but we won't prefer them in this branch
   const defaultText =
     chipTag && INTENTS[flow]?.fixed?.[chipTag]
       ? INTENTS[flow].fixed[chipTag]
@@ -778,37 +711,20 @@ async function handleMessageLike(chatId, userText, options = {}) {
     throw err;
   }
 
-  // Judge default vs AI (only on chip-tap first hop)
+  // Always use AI output (weaker policy for comparison)
   let finalBody = aiBody;
-  if (defaultText) {
-    try {
-      const verdict = await judgeAnswers({
-        flow,
-        userText,
-        defaultText,
-        aiText: aiBody,
-      });
-      log("🧪 judge verdict:", verdict);
-      const useAI = verdict.better === "ai" && verdict.confidence >= 0.65;
-      finalBody = useAI ? aiBody : defaultText;
-    } catch (err) {
-      if (err.message === "openai_quota") finalBody = defaultText;
-      else {
-        log("⚠️ judge error, using default:", err.message);
-        finalBody = defaultText;
-      }
-    }
-  }
 
   // Links
-  const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
-  const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
+  const aiLinks = extractUrls(aiBody);
+  const mergedLinks = Array.from(
+    new Set([...(aiLinks || []), ...(SG_DEFAULT_LINKS[flow] || [])])
+  ).slice(0, 6);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
 
   // Disclaimer always
-  const reply = `${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
+  const reply = `${finalBody}${moreInfo}\n\n_Note: General information only. For urgent concerns, seek professional help in your area._`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;
@@ -833,6 +749,7 @@ app.get("/health", (_req, res) => res.status(200).send("ok"));
 
 app.listen(PORT, async () => {
   log(`🚀 BabyGPT server on :${PORT}`);
+  log(`🧩 Ruleset: LOOSE/GENERIC (comparison branch)`);
   if (PUBLIC_URL && TELEGRAM_BOT_TOKEN) {
     await tgPost(
       "setWebhook",
