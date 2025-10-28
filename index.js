@@ -21,6 +21,12 @@ const log = (...a) => console.log("[BabyGPT]", ...a);
 // per-chat state
 const state = new Map(); // chatId -> { flow?: string, turns?: number }
 
+// ───────────────────────── RAG Config ─────────────────────────
+const RAG_ENABLED = true;
+const RAG_MAX = 4; // max sources to fetch
+const RAG_TIMEOUT_MS = 8000; // ms per fetch
+const DEBUG_COMPARE = false;
+
 // ───────────────────────────── Safety Rails ─────────────────────────
 const EMERGENCY_RE =
   /(blue lips|not ?breathing|unresponsive|seizure|stiff neck|bulging fontanelle|fever\s?(?:40|4[01])|difficulty breathing)/i;
@@ -423,6 +429,188 @@ function mergeSgLinks(defaultLinks = [], aiLinks = []) {
   return unique.slice(0, 6);
 }
 
+// ───────────────────── RAG helpers (plan → fetch → notes → compose) ─────────────────────
+function normalizeUrl(u) {
+  try {
+    const url = new URL(u);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchWithTimeout(url, { timeoutMs = RAG_TIMEOUT_MS, headers = {} } = {}) {
+  const ctl = new AbortController();
+  const id = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; BabyGPT/1.0; +https://example.invalid)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        ...headers,
+      },
+      signal: ctl.signal,
+    });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text };
+  } catch (err) {
+    return { ok: false, status: 0, error: err?.message || "fetch_failed" };
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+function htmlToText(html = "") {
+  let s = html;
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  s = s.replace(/<\/(p|div|br|li|tr)>/gi, "\n");
+  s = s.replace(/<[^>]+>/g, " ");
+  s = s.replace(/&nbsp;/g, " ");
+  s = s.replace(/&amp;/g, "&");
+  s = s.replace(/&lt;/g, "<");
+  s = s.replace(/&gt;/g, ">");
+  s = s.replace(/\s+\n/g, "\n");
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trim();
+}
+
+function extractTitle(html = "") {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (!m) return "";
+  return m[1].replace(/\s+/g, " ").trim();
+}
+
+function trimForModel(text = "", maxChars = 12000) {
+  if (text.length <= maxChars) return text;
+  return text.slice(0, maxChars);
+}
+
+function planRagSources(flow, userText, aiBody) {
+  const base = SG_DEFAULT_LINKS[flow] || [];
+  const aiLinks = extractUrls(aiBody || "").filter(isAllowedSG);
+  const merged = [...base, ...aiLinks];
+  const normed = Array.from(
+    new Set(
+      merged
+        .map(normalizeUrl)
+        .filter(Boolean)
+    )
+  );
+  return normed.slice(0, RAG_MAX);
+}
+
+async function summarizeSource(url, pageHtml, userText, flow) {
+  const title = extractTitle(pageHtml) || url;
+  const text = trimForModel(htmlToText(pageHtml), 14000);
+  if (!text) return null;
+
+  const schema = {
+    name: "SourceNotes",
+    schema: {
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        title: { type: "string" },
+        notes: { type: "string" },
+      },
+      required: ["url", "title", "notes"],
+      additionalProperties: false,
+    },
+  };
+
+  const prompt = `User question: """${userText}"""
+Flow: ${flow}
+
+From the following page content, extract concise notes relevant to the user's question. Use short imperative bullets, safety-first, SG context. No medical diagnosis. Max 120 words.
+
+Page title: ${title}
+Page URL: ${url}
+---- PAGE TEXT START ----
+${text}
+---- PAGE TEXT END ----`;
+
+  try {
+    const r = await callOpenAI(async () => {
+      const resp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_schema", json_schema: schema },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a careful summarizer for new parents in Singapore. Extract actionable, safe notes only from provided content.",
+          },
+          { role: "user", content: prompt },
+        ],
+      });
+      return JSON.parse(r.choices[0].message.content);
+    }, "summarizeSource");
+    return { url, title, notes: r.notes };
+  } catch (err) {
+    log("⚠️ summarize failed:", url, err.message);
+    return null;
+  }
+}
+
+async function composeFromNotes(flow, userText, chipTag, baseHint, notesList) {
+  const context = notesList
+    .map((n, i) => `[#${i + 1}] ${n.title} (${n.url})\n${n.notes}`)
+    .join("\n\n");
+
+  let system = `You are BabyGPT (Singapore). Short, clear steps first, then one friendly line. ≤180 words. No diagnosis. Emergencies → call 995.`;
+  if (flow === "unknown") {
+    system = `You are BabyGPT (Singapore), a warm, respectful parenting assistant. Be kind, avoid diagnosis. ≤180 words.`;
+  }
+  const rules = `House rules:\n- Use simple language.\n- Prefer SG official context (HealthHub, ECDA, MOM).\n- Encourage seeing a GP for health concerns.`;
+  const chipHint = chipTag ? `Subtopic focus: ${chipTag}.` : "";
+  const styleHint = INTENTS[flow]?.aiPrompt || "";
+
+  const user = `User message:\n"""${userText}"""\n\nContext:\n- Flow: ${flow}\n- ${chipHint}\n- ${styleHint}\n- Base hint: ${baseHint}\n\nUse ONLY the notes below. Compose answer with actionable steps first, then one warm line. Avoid citing numbers you cannot ground.\n\nNOTES:\n${context}`;
+
+  const text = await callOpenAI(async () => {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "system", content: rules },
+        { role: "user", content: user },
+      ],
+    });
+    return r.choices[0].message.content?.trim() || "Here are some steps you can try.";
+  }, "composeFromNotes");
+
+  return text;
+}
+
+async function composeRag(flow, userText, chipTag, baseHint, aiBody) {
+  const sources = planRagSources(flow, userText, aiBody);
+  if (!sources.length) return null;
+
+  const fetched = await Promise.all(
+    sources.map(async (url) => {
+      const res = await fetchWithTimeout(url);
+      if (!res.ok || !res.text) return null;
+      return { url, html: res.text };
+    })
+  );
+  const usable = fetched.filter(Boolean);
+  if (!usable.length) return null;
+
+  const notes = (
+    await Promise.all(
+      usable.map((p) => summarizeSource(p.url, p.html, userText, flow))
+    )
+  ).filter(Boolean);
+  if (!notes.length) return null;
+
+  const body = await composeFromNotes(flow, userText, chipTag, baseHint, notes);
+  return { body, sources: notes.map((n) => n.url) };
+}
+
 // ───────────────────── OpenAI helpers & judge ───────────────────────
 async function callOpenAI(fn, label) {
   try {
@@ -487,14 +675,14 @@ Context:
   return { aiBody: text, aiLinksRaw: extractUrls(text) };
 }
 
-// 2) Judge: compare default vs AI and return which is better + confidence
-async function judgeAnswers({ flow, userText, defaultText, aiText }) {
+// 2) Judge: compare answers and return best label + confidence
+async function judgeAnswers({ flow, userText, candidates }) {
   const schema = {
-    name: "AnswerJudge",
+    name: "AnswerJudgeV2",
     schema: {
       type: "object",
       properties: {
-        better: { type: "string", enum: ["default", "ai"] },
+        better: { type: "string" },
         confidence: { type: "number", minimum: 0, maximum: 1 },
         reason: { type: "string" },
       },
@@ -502,6 +690,10 @@ async function judgeAnswers({ flow, userText, defaultText, aiText }) {
       additionalProperties: false,
     },
   };
+  const entries = Object.entries(candidates)
+    .map(([k, v]) => `--- ${k.toUpperCase()} ---\n${v}`)
+    .join("\n\n");
+
   const judgePrompt = `Evaluate which answer better serves a new parent in Singapore.
 
 Criteria (in order):
@@ -516,11 +708,8 @@ User:
 """${userText}"""
 Flow: ${flow}
 
-Default (canonical) answer:
-"""${defaultText}"""
-
-AI generated answer:
-"""${aiText}"""`;
+Candidates:
+${entries}`;
 
   const result = await callOpenAI(async () => {
     const r = await openai.chat.completions.create({
@@ -531,7 +720,7 @@ AI generated answer:
         {
           role: "system",
           content:
-            "You are an impartial judge. Compare two answers, pick the better one and give a confidence 0–1.",
+            "You are an impartial judge. Compare multiple answers, pick the best and give a confidence 0–1.",
         },
         { role: "user", content: judgePrompt },
       ],
@@ -778,31 +967,45 @@ async function handleMessageLike(chatId, userText, options = {}) {
     throw err;
   }
 
-  // Judge default vs AI (only on chip-tap first hop)
-  let finalBody = aiBody;
-  if (defaultText) {
+  // Try RAG if enabled
+  let rag = null;
+  if (RAG_ENABLED) {
     try {
-      const verdict = await judgeAnswers({
-        flow,
-        userText,
-        defaultText,
-        aiText: aiBody,
-      });
-      log("🧪 judge verdict:", verdict);
-      const useAI = verdict.better === "ai" && verdict.confidence >= 0.65;
-      finalBody = useAI ? aiBody : defaultText;
+      rag = await composeRag(flow, userText, chipTag, baseHint, aiBody);
     } catch (err) {
-      if (err.message === "openai_quota") finalBody = defaultText;
-      else {
-        log("⚠️ judge error, using default:", err.message);
-        finalBody = defaultText;
-      }
+      log("⚠️ RAG compose failed:", err.message);
     }
   }
 
-  // Links
-  const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
-  const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
+  // Build candidates for judging
+  const candidates = { ai: aiBody };
+  if (rag?.body) candidates.rag = rag.body;
+  if (defaultText) candidates.default = defaultText;
+
+  let finalBody = aiBody;
+  let finalLinks = [];
+  try {
+    if (Object.keys(candidates).length > 1) {
+      const verdict = await judgeAnswers({ flow, userText, candidates });
+      if (DEBUG_COMPARE) log("🧪 judge verdict:", verdict);
+      const key = verdict?.better;
+      if (key && candidates[key]) finalBody = candidates[key];
+    }
+  } catch (err) {
+    if (DEBUG_COMPARE) log("⚠️ judge compare error:", err.message);
+    if (defaultText) finalBody = defaultText;
+  }
+
+  // Links: prefer RAG sources if RAG answer is used; else derive from chosen body
+  if (rag?.body && finalBody === rag.body && Array.isArray(rag.sources)) {
+    finalLinks = mergeSgLinks([], rag.sources);
+  } else {
+    const chosenLinks = extractUrls(finalBody).filter(isAllowedSG);
+    const baseLinks = SG_DEFAULT_LINKS[flow] || [];
+    finalLinks = mergeSgLinks(baseLinks, chosenLinks);
+  }
+
+  const mergedLinks = finalLinks;
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
