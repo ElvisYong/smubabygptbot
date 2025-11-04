@@ -66,6 +66,7 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "data.gov.sg",
   "familiesforlife.sg",
 ];
 
@@ -421,6 +422,120 @@ function mergeSgLinks(defaultLinks = [], aiLinks = []) {
   const filtered = [...defaultLinks, ...aiLinks.filter(isAllowedSG)];
   const unique = Array.from(new Set(filtered));
   return unique.slice(0, 6);
+}
+
+// ───────────────────── ECDA infantcare lookup (Data.gov.sg) ───────────────────
+let CHILDCARE_RESOURCE_ID = null;
+
+async function fetchJsonWithTimeout(url, timeoutMs = 4000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function findChildcareResourceId() {
+  if (CHILDCARE_RESOURCE_ID) return CHILDCARE_RESOURCE_ID;
+  const queries = [
+    "ecda preschool",
+    "child care centres",
+    "childcare centres",
+    "preschool centres",
+  ];
+  for (const q of queries) {
+    const url = `https://data.gov.sg/api/3/action/package_search?q=${encodeURIComponent(
+      q
+    )}`;
+    const data = await fetchJsonWithTimeout(url, 4000);
+    const pkgs = data?.result?.results || [];
+    for (const p of pkgs) {
+      const r = (p.resources || []).find((x) => x.datastore_active);
+      if (r?.id) {
+        CHILDCARE_RESOURCE_ID = r.id;
+        return CHILDCARE_RESOURCE_ID;
+      }
+    }
+  }
+  return null;
+}
+
+function pickField(rec, candidates) {
+  for (const c of candidates) {
+    if (rec[c] != null && String(rec[c]).trim()) return String(rec[c]).trim();
+  }
+  // heuristic fallback: first key containing any token
+  const keys = Object.keys(rec);
+  for (const k of keys) {
+    if (candidates.some((t) => k.toLowerCase().includes(t))) {
+      const v = rec[k];
+      if (v != null && String(v).trim()) return String(v).trim();
+    }
+  }
+  return "";
+}
+
+function normalizeYes(value) {
+  const s = String(value).toLowerCase();
+  return s === "y" || s === "yes" || s === "true" || s === "1";
+}
+
+async function searchInfantcareInArea(area, limit = 5) {
+  const rid = await findChildcareResourceId();
+  if (!rid) return [];
+  const url = `https://data.gov.sg/api/3/action/datastore_search?resource_id=${rid}&q=${encodeURIComponent(
+    area
+  )}&limit=50`;
+  const data = await fetchJsonWithTimeout(url, 5000);
+  const records = data?.result?.records || [];
+  const items = [];
+  for (const rec of records) {
+    // Try to detect infant care availability if field exists; otherwise keep
+    const origKeys = Object.keys(rec);
+    let offersInfant = true;
+    const infantOrigKey = origKeys.find((k) => {
+      const lk = k.toLowerCase();
+      return lk.includes("infant") && !lk.includes("vac");
+    });
+    if (infantOrigKey) offersInfant = normalizeYes(rec[infantOrigKey]);
+
+    if (!offersInfant) continue;
+    const name =
+      pickField(rec, [
+        "centre_name",
+        "centre name",
+        "name",
+        "centre",
+        "centreName",
+      ]) || "Unnamed centre";
+    const address =
+      pickField(rec, ["address", "addr", "street", "blk", "road"]) ||
+      "Address unavailable";
+    items.push({ name, address });
+  }
+  const seen = new Set();
+  const unique = [];
+  for (const it of items) {
+    const key = it.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(it);
+    if (unique.length >= limit) break;
+  }
+  return unique;
+}
+
+function extractCaregiverAreaQuery(text = "") {
+  const re = /\b(?:infant\s?care|infantcare|child\s?care|preschool)s?[^\n]*?\b(?:in|at|around|near)\s+([A-Za-z][A-Za-z \-]{1,40})\b/i;
+  const m = text.match(re);
+  if (!m) return null;
+  return m[1].replace(/[^\w\s\-]/g, "").trim();
 }
 
 // ───────────────────── OpenAI helpers & judge ───────────────────────
@@ -801,6 +916,24 @@ async function handleMessageLike(chatId, userText, options = {}) {
   }
 
   // Links
+  // Local infantcare listing (caregiver flow + area)
+  let localList = "";
+  if (flow === "caregiver") {
+    const area = extractCaregiverAreaQuery(userText);
+    if (area) {
+      try {
+        const centres = await searchInfantcareInArea(area, 5);
+        if (centres.length) {
+          const list = centres
+            .map((c) => `• ${c.name} — ${c.address}`)
+            .join("\n");
+          localList = `Nearby infantcare in ${area}:\n${list}\n\nECDA Preschool Search: https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx`;
+        }
+      } catch {}
+    }
+  }
+
+  // Links
   const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
   const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
   const moreInfo = mergedLinks.length
@@ -808,7 +941,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
     : "";
 
   // Disclaimer always
-  const reply = `${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
+  const reply = `${localList ? localList + "\n\n" : ""}${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;
