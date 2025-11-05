@@ -165,17 +165,13 @@ const INTENTS = {
     },
     aiPrompt: `For area-specific or comparison questions, summarise options and next steps; include ECDA/LifeSG/MOM references.`,
   },
-  advice: {
-    label: "Conflicting Advice",
+  wellbeing: {
+    label: "Parental Wellbeing",
     chips: [
-      { tag: "evidence", label: "📚 Use trusted guidance" },
-      { tag: "plan", label: "🧭 Choose one plan" },
-      { tag: "family", label: "👨‍👩‍👧 Talk with family" },
+      { tag: "conflict", label: "🧭 Conflicting advice" },
     ],
     patterns: {
-      evidence: /evidence|research|guidelines|healthhub/i,
-      plan: /pick one|choose|trial/i,
-      family: /grand(ma|pa)|in-laws?|family/i,
+      conflict: /conflicting|too many opinions|overload|disagree/i,
     },
     aiPrompt: `Help the parent choose a plan: refer to HealthHub guidance, choose one approach, try 3–5 days, then review with family.`,
   },
@@ -272,7 +268,7 @@ Full guide (PDF): https://www.ecda.gov.sg/docs/default-source/default-document-l
 • Backup plan if sick or late?`,
     },
   ],
-  advice: [
+  wellbeing: [
     {
       tag: "family-talk",
       label: "👨‍👩‍👧 Family chat tips",
@@ -734,7 +730,7 @@ function ruleIntentTop(text) {
   )
     return "caregiver";
   if (/conflicting|too many opinions|overload|disagree/.test(s))
-    return "advice";
+    return "wellbeing";
   if (/overwhelmed|anxious|tired|burnt\s?out/.test(s)) return "wellbeing";
   if (/help|menu/.test(s)) return "help";
   return "unknown"; // let unknown flow go to AI with gentle persona
@@ -773,8 +769,8 @@ app.post("/telegram/webhook", async (req, res) => {
             "Share your feeding concern (starting solids, milk amounts, meal ideas). 💬 *You can also type your own question anytime!*",
           caregiver:
             "Tell me what you need (infantcare, helper/MDW, nanny) and your area. 💬 *You can also type your own question anytime!*",
-          advice:
-            "Tell me the advice you’ve received and what feels confusing. 💬 *You can also type your own question anytime!*",
+          wellbeing:
+            "Share what’s causing stress or conflicting advice, and what you’ve tried. 💬 *You can also type your own question anytime!*",
         };
         await sendMsg(
           chatId,
@@ -929,7 +925,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
       ? "0–6m: milk on demand; 6–12m: start iron-rich solids; >12m: family meals; avoid choking."
       : flow === "cry"
       ? "Soothing: feed → burp → swaddle + white noise → dim lights; keep age-appropriate awake windows."
-      : flow === "advice"
+      : flow === "wellbeing"
       ? "Plan: use trusted guidance (HealthHub), choose one approach, try 3–5 days, then review."
       : flow === "caregiver"
       ? "Explain that preschool information is governed by ECDA. For infant care search, guide users to the LifeSG app and provide concise steps: open LifeSG → Family & Parenting → Preschool → search by area → filter Service type=Infant care (and fees/vacancies) → shortlist and visit 2–3 centres. Include ECDA/LifeSG references."

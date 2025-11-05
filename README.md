@@ -18,6 +18,121 @@ BabyGPT focuses on **providing accurate information and practical steps** rather
 
 ---
 
+## 🗺️ Mermaid Flowcharts
+
+High‑level update routing and response composition
+
+```mermaid
+flowchart TD
+  A[Telegram update] -->|callback_query| B[Handle callback_query]
+  A -->|message / edited_message| C[Handle message]
+
+  %% Callback path
+  B --> B0[answerCbq]
+  B -->|flow:<flow>| D[Set state {flow,turns=0}; send kbContext(flow)]
+  B -->|tips:<flow>| E[Send tips menu kbTipsMenu(flow)]
+  B -->|tip:<flow>:<tag>| F[Send tip text + kbFooter]
+  B -->|chip:<flow>:<tag>| G[handleMessageLike(forcedFlow, forcedTag)]
+  B -->|nav:type| H[Prompt to type + kbFooter]
+  B -->|nav:home| I[Clear state; send kbMain]
+  B -->|nav:change| J[Clear state; send kbMain]
+
+  %% Message path
+  C -->|/start| K[Clear state; send intro + kbMain]
+  C -->|EMERGENCY_RE| L[Send 995/A&E message + kbMain]
+  C -->|OFFLIMIT_RE| M[Send decline + helplines + kbMain]
+  C -->|else| N[handleMessageLike(state.flow || ruleIntentTop(text))]
+
+  %% Core composition
+  subgraph S[handleMessageLike]
+    N --> N1[Decide flow: forcedFlow || state.flow || ruleIntentTop]
+    N1 -->|help| Nhelp[Send "Choose a topic" + kbMain]
+    N1 --> N2[chipTag=forcedTag; baseHint per flow]
+    N2 --> N3[composeAI(flow, userText, chipTag, baseHint)]
+    N3 --> N4{chipTag has canonical default?}
+    N4 -->|yes| N5[judge default vs AI; pick AI if confidence ≥ 0.65]
+    N4 -->|no| N6[use AI text]
+    N5 --> N6
+
+    %% Caregiver enrichment
+    N6 --> N7{flow == caregiver?}
+    N7 -->|yes| CG[Caregiver extras]
+    N7 -->|no| N8
+
+    subgraph CG[Caregiver extras]
+      CG1[If area in text → search Data.gov.sg for nearby centres (top 5)]
+      CG2[Prepend LifeSG steps (ECDA-governed) to reply]
+      N6 --> CG1 --> CG2 --> N8
+    end
+
+    N8[Links] --> N9[aiLinks=extractUrls(aiBody) ∩ whitelist; baseLinks=defaultLinksFor(flow,userText,chipTag); merged ≤ 6]
+    N9 --> N10[Append disclaimer]
+    N10 --> N11[Update state.turns; choose keyboard:\n  unknown → kbFooter;\n  in-flow first 3 → kbFooter;\n  else → none;\n  no flow → kbMain]
+    N11 --> N12[sendMsg(reply, replyKb)]
+  end
+```
+
+Menu → flow → chips/tips navigation map
+
+```mermaid
+flowchart LR
+  MM[🏠 Main menu (kbMain)] -->|flow:cry| Cry[🍼 Crying / Sleep]
+  MM -->|flow:nutrition| Nut[🥣 Nutrition]
+  MM -->|flow:caregiver| Care[👩‍🍼 Caregiving]
+  MM -->|flow:wellbeing| Well[🧘 Parental Wellbeing]
+
+  subgraph Cry[cry chips (kbContext)]
+    Cry --> Night[🌙 night]
+    Cry --> Gas[😣 gas]
+    Cry --> Naps[💤 naps]
+    Cry --> Bedtime[🧸 bedtime]
+  end
+
+  subgraph Nut[nutrition chips]
+    Nut --> Solids[🥄 solids]
+    Nut --> Milk[🍼 milk]
+    Nut --> Meals[🍚 meals]
+    Nut --> Allergy[🥜 allergy]
+  end
+
+  subgraph Care[caregiver chips]
+    Care --> Infantcare[👶 infantcare]
+    Care --> MDW[🧹 helper/MDW]
+    Care --> Nanny[👩 nanny]
+    Care --> TipsBtn[💡 Tips]
+  end
+
+  subgraph Well[wellbeing chips]
+    Well --> Conflict[🧭 conflicting advice]
+  end
+
+  subgraph Tips[tips menu]
+    TipsBtn --> Tip1[📝 visit-checklist]
+    TipsBtn --> Tip2[📄 ECDA step-by-step]
+    TipsBtn --> Back[⬅️ Back → flow:caregiver]
+  end
+
+  %% Chip taps call into one-hop answer with judge (if canonical) then AI
+  Night --> HML1[handleMessageLike(forcedFlow, forcedTag)]
+  Gas --> HML2[handleMessageLike(forcedFlow, forcedTag)]
+  Naps --> HML3[handleMessageLike(forcedFlow, forcedTag)]
+  Bedtime --> HML4[handleMessageLike(forcedFlow, forcedTag)]
+  Solids --> HML5
+  Milk --> HML6
+  Meals --> HML7
+  Allergy --> HML8
+  Infantcare --> HML9
+  MDW --> HML10
+  Nanny --> HML11
+
+  %% Navigation buttons
+  classDef nav fill:#eef,stroke:#99f,color:#000;
+  classDef chip fill:#efe,stroke:#7c7,color:#000;
+  class Tip1,Tip2,Back nav;
+  class Night,Gas,Naps,Bedtime,Solids,Milk,Meals,Allergy,Infantcare,MDW,Nanny,Conflict chip;
+```
+
+---
 ## ⚙️ Requirements
 
 - Node.js 18+ (uses the global `fetch` and ESM)
@@ -29,7 +144,7 @@ BabyGPT focuses on **providing accurate information and practical steps** rather
 
 ## ✨ Flow v2 — What changed
 
-- **Main menu + chips UI**: After choosing a topic (Cry, Nutrition, Caregiving, Conflicting Advice), you get context-specific chips (subtopics) to narrow the request.
+- **Main menu + chips UI**: After choosing a topic (Cry, Nutrition, Caregiving, Parental Wellbeing), you get context-specific chips (subtopics) to narrow the request.
 - **Answer Judge (on chip taps only)**: For some chips, the bot has a short, canonical default answer. It also generates an AI answer, then uses a judge to pick the better one (threshold 0.65). Free-typed follow-ups go AI-first without judging.
 - **SG link policy**: AI-proposed links are filtered to whitelisted SG domains and merged with curated defaults for the selected flow.
 - **Turn-aware footer**: A compact footer with navigation shows for the first few turns in a flow.
@@ -120,7 +235,7 @@ Endpoints:
 
 ## 🎯 Intent Handling
 
-- Top-level routing via lightweight regex mapper (`ruleIntentTop`): `cry`, `nutrition`, `caregiver`, `advice`, plus `wellbeing` and `help` for special handling.
+- Top-level routing via lightweight regex mapper (`ruleIntentTop`): `cry`, `nutrition`, `caregiver`, `wellbeing`, plus `help` for special handling.
 - Flow is sticky per chat (`state` stores `{ flow, turns }`). Selecting a flow from the main menu sets the flow and shows context chips.
 - Chip detection inside a flow via regex patterns, or explicit chip selection from the UI.
 - For chips with canonical guidance, the bot may pick between the canonical default and AI-generated answer using a judge (see below).
@@ -143,7 +258,7 @@ Endpoints:
   - 🍼 Crying / Sleep (`cry`)
   - 🥣 Nutrition (`nutrition`)
   - 👩‍🍼 Caregiving (`caregiver`)
-  - 🧭 Conflicting Advice (`advice`)
+  - 🧘 Parental Wellbeing (`wellbeing`)
 - **Context chips** per flow (examples below) to quickly specialise the topic. The Cry flow chips are now: `🌙 Wakes at night`, `😣 Gas / tummy discomfort`, `💤 Day naps`, `🧸 Bedtime routine`.
 - **Navigation**: `🏠 Main menu` and `🔄 Change topic` buttons are always available in the context UI, and a compact footer shows during early turns.
 - **Tips menu**: Each flow includes a `💡 Tips` submenu with 2–3 quick references.
@@ -151,6 +266,55 @@ Endpoints:
 
 Caregiver-specific additions:
 - Tips include **📄 ECDA step-by-step** (short summary with a link to the PDF).
+
+---
+
+## 🔘 Button Flow Mechanics (Callback UI)
+
+This summarizes how the inline keyboards and callbacks wire the conversation:
+
+- **Main menu (`kbMain`)**
+  - Built from `INTENTS` (`cry`, `nutrition`, `caregiver`, `wellbeing`).
+  - Each button sends `callback_data = flow:<flow>`.
+
+- **On `flow:<flow>`**
+  - Sets a sticky flow in chat `state` → `{ flow, turns: 0 }`.
+  - Sends a short prompt plus the **context keyboard** `kbContext(flow)`.
+
+- **Context keyboard (`kbContext(flow)`)**
+  - Chip buttons from `INTENTS[flow].chips` → `callback_data = chip:<flow>:<tag>`.
+  - Tips entry → `callback_data = tips:<flow>`.
+  - `💬 Type my own question` → `callback_data = nav:type`.
+  - Footer row: `🔄 Change topic` → `nav:change`, `🏠 Main menu` → `nav:home`.
+
+- **Tips menu (`kbTipsMenu(flow)`)**
+  - Each tip → `callback_data = tip:<flow>:<tag>`.
+  - Navigation: `⬅️ Back` → `flow:<flow>`, plus `🏠 Main menu`.
+
+- **Chip behavior (`chip:<flow>:<tag>`)**
+  - Runs one-hop answer composition with `forcedFlow` and `forcedTag`.
+  - If a canonical snippet exists for that chip, a judge compares canonical vs AI and picks the better one (`confidence ≥ 0.65`).
+  - Free-typed follow-ups after that go AI-first (no judge).
+
+- **Navigation callbacks**
+  - `nav:type`: prompts the user to type their own question and shows the small footer.
+  - `nav:home` and `nav:change`: clear `state` and show the main menu again.
+
+- **Typed messages**
+  - `/start`: shows intro + main menu.
+  - Messages matching emergency/off-limit rules are handled immediately (A&E/helplines).
+  - Otherwise routed to `handleMessageLike`:
+    - Flow detection: `forcedFlow` → sticky `state.flow` → regex `ruleIntentTop`.
+    - Unknown topics use a gentle persona and always show the small footer.
+
+- **Turn-aware footer policy**
+  - If the flow is `unknown`: always show the footer.
+  - If the user is inside a chosen flow: show the small footer for the first 3 turns; hide it afterwards.
+  - If no flow is set yet: show the main menu.
+
+- **Links and local enhancements**
+  - “More information” merges filtered AI links with **subtopic-specific defaults** (e.g., ECDA/LifeSG for infantcare; MOM for helper/MDW). Non‑relevant links (like MOM) won’t appear on preschool queries.
+  - For caregiver preschool/infantcare queries: a short **LifeSG guide** is prepended; if the user mentions an area, up to 5 **nearby centres** are listed via **Data.gov.sg**.
 
 ---
 
@@ -167,15 +331,15 @@ BabyGPT’s logic follows **structured conversation flows**, ensuring users stay
 > “Hi! I'm BabyGPT (Singapore Edition) — your friendly companion for first-time parents of babies aged 0–3.  
 > I can help with:  
 > 1️⃣ Health & Development – sleep, crying, feeding, milestones  
-> 2️⃣ Caregiving Support – infantcare, helper info, conflicting advice  
-> 3️⃣ Parental Wellbeing – gentle self-care tips”
+> 2️⃣ Caregiving Support – infantcare, helper info  
+> 3️⃣ Parental Wellbeing – conflicting advice and gentle self-care tips”
 
 **User chooses** from inline buttons:
 
 - 🍼 Crying / Sleep
 - 🥣 Nutrition
 - 👩‍🍼 Caregiving
-- 🧭 Conflicting Advice
+- 🧘 Parental Wellbeing
 
 ---
 
@@ -190,9 +354,8 @@ BabyGPT’s logic follows **structured conversation flows**, ensuring users stay
 - **Caregiving (`caregiver`)** chips: `infantcare`, `mdw` (helper), `nanny`
   - Canonical snippets exist for all three; links: ECDA, LifeSG, MOM
   - For preschool/infantcare queries, replies include a **LifeSG how‑to** and may show **nearby centres** (top 5) using Data.gov.sg when an area is mentioned.
-- **Conflicting Advice (`advice`)** chips: `evidence`, `plan`, `family`
-  - No canonical snippet; AI composes with rules to cite SG guidance and propose a trial plan
-- Recognised via text (not a button): **`wellbeing`** — AI composes short wellbeing tips; links: IMH, SOS
+- **Parental Wellbeing (`wellbeing`)** chips: `conflict`
+  - No canonical snippet; AI composes concise support and a plan (cite SG guidance; pick one approach; try 3–5 days; review with family). Tips include “Family chat tips” and “Stick to one plan”.
 - For unknown topics, the bot replies with a gentle, supportive persona and basic navigation.
 
 Judge selection runs only when a canonical snippet exists for the chosen chip.
@@ -204,7 +367,7 @@ Judge selection runs only when a canonical snippet exists for the chosen chip.
 ### Example: Crying & Sleep Path
 
 User: /start  
-Bot shows main menu (Cry / Nutrition / Caregiving / Conflicting Advice)  
+Bot shows main menu (Cry / Nutrition / Caregiving / Parental Wellbeing)  
 ⬇️ User taps “🍼 Crying / Sleep” → chips appear (`🌙 Wakes at night`, `😣 Gas / tummy discomfort`, `💤 Day naps`, `🧸 Bedtime routine`)  
 ⬇️ User taps `😣 Gas / tummy discomfort`  
 Bot composes an AI answer, compares with the canonical gas snippet (judge threshold 0.65), and sends the better one.  
@@ -231,7 +394,7 @@ Bot prepends a short **LifeSG guide** (ECDA-governed info, steps to use LifeSG),
 
 ## 🔗 SG Links Policy
 
-- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`, `data.gov.sg`.
+- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `lifesg.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`, `data.gov.sg`.
 - Curated default links per flow are always preferred; filtered AI links are merged on top, deduplicated, and trimmed.
 - Unknown flow has safe defaults referencing Families for Life and HealthHub overview pages.
 - All replies end with: `_Disclaimer: General info only. For emergencies, call 995._`
