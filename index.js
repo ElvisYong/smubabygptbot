@@ -39,6 +39,7 @@ const SG_DEFAULT_LINKS = {
   ],
   caregiver: [
     "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
     "https://www.life.gov.sg/services/parenting/preschool",
     "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
   ],
@@ -241,6 +242,17 @@ const TIPS = {
 • Hygiene, staff ratio, safety gates.
 • Caregiver warmth and how they talk to babies.
 • Daily routine, nap space, feeding policy.`,
+    },
+    {
+      tag: "ecda-guide",
+      label: "📄 ECDA step-by-step",
+      text: `ECDA’s guide to finding preschool:
+• Use the LifeSG app → Family & Parenting → Preschool.
+• Search by area; filter service type = Infant care.
+• Check fees, vacancies, opening hours; shortlist 2–3 centres.
+• Arrange visits before deciding.
+
+Full guide (PDF): https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf`,
     },
     {
       tag: "mdw-interview",
@@ -536,6 +548,26 @@ function extractCaregiverAreaQuery(text = "") {
   const m = text.match(re);
   if (!m) return null;
   return m[1].replace(/[^\w\s\-]/g, "").trim();
+}
+
+function isPreschoolOrInfantcareQuery(text = "") {
+  const s = text.toLowerCase();
+  return /\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/.test(s);
+}
+
+function buildLifeSgSteps(area = null) {
+  const where = area ? ` in ${area}` : "";
+  const header = `Preschool information in Singapore is governed by ECDA.\nUse the LifeSG app to find infant care/preschools${where}:`;
+  const steps = [
+    "Install/open LifeSG.",
+    "Tap Family & Parenting → Preschool.",
+    `Search by area${area ? ` (e.g. ${area})` : " or use Near Me"}.`,
+    "Filter: Service type = Infant care (and set fees, vacancies, opening hours).",
+    "Open a centre page to view address, fees, vacancies; add to shortlist.",
+    "Shortlist 2–3 centres and arrange visits before deciding.",
+  ].join("\n");
+  const links = "LifeSG: https://www.life.gov.sg\nECDA Preschool Search (web): https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx\nECDA Step-by-step Guide (PDF): https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf";
+  return `${header}\n${steps}\n\n${links}`;
 }
 
 // ───────────────────── OpenAI helpers & judge ───────────────────────
@@ -868,7 +900,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
       : flow === "advice"
       ? "Plan: use trusted guidance (HealthHub), choose one approach, try 3–5 days, then review."
       : flow === "caregiver"
-      ? "Summarise choices; link ECDA/LifeSG/MOM; give next-step checklist."
+      ? "Explain that preschool information is governed by ECDA. For infant care search, guide users to the LifeSG app and provide concise steps: open LifeSG → Family & Parenting → Preschool → search by area → filter Service type=Infant care (and fees/vacancies) → shortlist and visit 2–3 centres. Include ECDA/LifeSG references."
       : "";
 
   // Canonical default only for one-time chip taps
@@ -918,6 +950,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
   // Links
   // Local infantcare listing (caregiver flow + area)
   let localList = "";
+  let lifesgGuide = "";
   if (flow === "caregiver") {
     const area = extractCaregiverAreaQuery(userText);
     if (area) {
@@ -931,6 +964,9 @@ async function handleMessageLike(chatId, userText, options = {}) {
         }
       } catch {}
     }
+    if (isPreschoolOrInfantcareQuery(userText)) {
+      lifesgGuide = buildLifeSgSteps(area);
+    }
   }
 
   // Links
@@ -941,7 +977,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
     : "";
 
   // Disclaimer always
-  const reply = `${localList ? localList + "\n\n" : ""}${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
+  const reply = `${lifesgGuide ? lifesgGuide + "\n\n" : ""}${localList ? localList + "\n\n" : ""}${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;
