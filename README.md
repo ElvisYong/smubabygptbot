@@ -5,10 +5,14 @@
 **BabyGPT** is a conversational assistant designed to support **new parents with newborns (0–3 years old)** in Singapore.  
 Many first-time parents face overwhelming stress, fragmented information, and conflicting advice during early parenthood. BabyGPT aims to **ease their journey** by providing:
 
-- Reliable, **localized guidance** (e.g., HealthHub, ECDA, MOM links)
+- Reliable, **localized guidance** (e.g., HealthHub, ECDA, LifeSG, MOM links)
 - Contextual and **empathetic responses** (not just static text)
 - Guardrails for **safety and responsible advice**
 - Structured **intent-based flows** to manage different parenting concerns
+
+Additional caregiver features:
+- **LifeSG step-by-step guidance** for preschool/infantcare queries, with explicit mention that preschool information is governed by **ECDA**.
+- **Area-based infantcare listing**: when users ask for infant care/preschools “in <area>”, the bot lists nearby centres using the **Data.gov.sg** dataset (with graceful fallback when unavailable).
 
 BabyGPT focuses on **providing accurate information and practical steps** rather than overwhelming new parents with excessive online content. It helps them confidently navigate parenthood in their first years.
 
@@ -31,6 +35,11 @@ BabyGPT focuses on **providing accurate information and practical steps** rather
 - **Turn-aware footer**: A compact footer with navigation shows for the first few turns in a flow.
 - **Tips menu + Type-your-own**: Per-flow quick tips and an explicit "💬 Type my own question" option.
 - **Unknown-friendly persona**: When the message doesn’t fit any flow, the bot answers gently (no diagnosis) and shows basic navigation.
+
+New in caregiver flow:
+- **LifeSG guidance injection** for preschool/infantcare queries, citing the ECDA step-by-step PDF.
+- **Area-based infantcare listing** using the Data.gov.sg childcare dataset (top 5 near the requested area, with graceful fallback if the dataset is unavailable).
+- New tip: **📄 ECDA step-by-step**.
 
 ## 🚀 Quick Start
 
@@ -118,9 +127,12 @@ Endpoints:
 
 ### Response Composition
 
+0. **Caregiver enrichment (preschool/infantcare queries)**:
+   - Prepends a short **LifeSG how‑to** (Family & Parenting → Preschool → search by area → filter Service type = Infant care, fees, vacancies → shortlist and visit 2–3 centres), explicitly stating preschool info is governed by **ECDA**.
+   - If the user mentions an area (e.g., "in Sengkang"), shows up to **5 nearby centres** via **Data.gov.sg**. Falls back silently if the dataset is unavailable.
 1. Compose: The bot calls OpenAI (`gpt-4o-mini`) to compose concise, step-first guidance (≤180 words). System rules emphasise SG context and safety.
 2. Judge (when a canonical default exists): Compares canonical vs AI answer and selects the better one if `confidence ≥ 0.65`. If the judge errors (e.g., quota), it uses the canonical default.
-3. Links: Extracts URLs from the AI answer, filters to SG whitelisted hosts, and merges with curated defaults per flow.
+3. Links: Extracts URLs from the AI answer, filters to SG whitelisted hosts, and merges with curated defaults per flow. The caregiver defaults include the **ECDA Step‑by‑Step PDF** and **ECDA Preschool Search**.
 4. Footer & turns: Shows a small nav footer for the first few turns within a flow; always appends the safety disclaimer.
 
 ---
@@ -136,6 +148,9 @@ Endpoints:
 - **Navigation**: `🏠 Main menu` and `🔄 Change topic` buttons are always available in the context UI, and a compact footer shows during early turns.
 - **Tips menu**: Each flow includes a `💡 Tips` submenu with 2–3 quick references.
 - **Type-your-own**: `💬 Type my own question` lets users free-type; follow-ups are AI-first.
+
+Caregiver-specific additions:
+- Tips include **📄 ECDA step-by-step** (short summary with a link to the PDF).
 
 ---
 
@@ -174,6 +189,7 @@ BabyGPT’s logic follows **structured conversation flows**, ensuring users stay
   - Default SG links merged in: HealthHub diet and recipe pages
 - **Caregiving (`caregiver`)** chips: `infantcare`, `mdw` (helper), `nanny`
   - Canonical snippets exist for all three; links: ECDA, LifeSG, MOM
+  - For preschool/infantcare queries, replies include a **LifeSG how‑to** and may show **nearby centres** (top 5) using Data.gov.sg when an area is mentioned.
 - **Conflicting Advice (`advice`)** chips: `evidence`, `plan`, `family`
   - No canonical snippet; AI composes with rules to cite SG guidance and propose a trial plan
 - Recognised via text (not a button): **`wellbeing`** — AI composes short wellbeing tips; links: IMH, SOS
@@ -199,7 +215,7 @@ Bot appends curated SG links and the standard disclaimer.
 User: /start → taps 👩‍🍼 Caregiving  
 Chips: `👶 Infantcare`, `🧹 Helper / MDW`, `👩 Nanny/Babysitter`  
 ⬇️ User taps `👶 Infantcare`  
-Bot replies with a concise checklist (canonical vs AI judged) and adds ECDA/LifeSG links.
+Bot prepends a short **LifeSG guide** (ECDA-governed info, steps to use LifeSG), then replies with the usual answer and ECDA/LifeSG links. If the user asks e.g. "infantcare in Sengkang", it also lists nearby centres (top 5) from Data.gov.sg.
 
 ---
 
@@ -215,7 +231,7 @@ Bot replies with a concise checklist (canonical vs AI judged) and adds ECDA/Life
 
 ## 🔗 SG Links Policy
 
-- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`.
+- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`, `data.gov.sg`.
 - Curated default links per flow are always preferred; filtered AI links are merged on top, deduplicated, and trimmed.
 - Unknown flow has safe defaults referencing Families for Life and HealthHub overview pages.
 - All replies end with: `_Disclaimer: General info only. For emergencies, call 995._`
@@ -238,6 +254,9 @@ curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 - Markdown formatting issues in replies → The bot uses `parse_mode: Markdown`.
 - WSL2 or local dev → Ensure the tunnel URL is stable and exported in `.env`.
 - Node version errors → Use Node 18+.
+
+Caregiver enrichment specifics:
+- Data.gov.sg listing not shown → Dataset unavailable or no matches for the area; the bot falls back to LifeSG steps and links.
 
 ---
 

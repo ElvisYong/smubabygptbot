@@ -67,6 +67,7 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "lifesg.gov.sg",
   "data.gov.sg",
   "familiesforlife.sg",
 ];
@@ -570,6 +571,37 @@ function buildLifeSgSteps(area = null) {
   return `${header}\n${steps}\n\n${links}`;
 }
 
+function inferCaregiverSubtopic(text = "") {
+  const s = text.toLowerCase();
+  const p = INTENTS.caregiver?.patterns || {};
+  if (p.infantcare && p.infantcare.test(s)) return "infantcare";
+  if (p.mdw && p.mdw.test(s)) return "mdw";
+  if (p.nanny && p.nanny.test(s)) return "nanny";
+  if (isPreschoolOrInfantcareQuery(s)) return "infantcare";
+  return null;
+}
+
+function defaultLinksFor(flow, userText, chipTag = null) {
+  if (flow !== "caregiver") return SG_DEFAULT_LINKS[flow] || [];
+  const sub = chipTag || inferCaregiverSubtopic(userText) || "generic";
+  if (sub === "mdw") {
+    return [
+      "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    ];
+  }
+  if (sub === "nanny") {
+    return [
+      "https://familiesforlife.sg/parenting",
+    ];
+  }
+  // infantcare/preschool or generic caregiver search defaults
+  return [
+    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
+    "https://www.life.gov.sg/services/parenting/preschool",
+  ];
+}
+
 // ───────────────────── OpenAI helpers & judge ───────────────────────
 async function callOpenAI(fn, label) {
   try {
@@ -971,7 +1003,8 @@ async function handleMessageLike(chatId, userText, options = {}) {
 
   // Links
   const aiSgLinks = extractUrls(aiBody).filter(isAllowedSG);
-  const mergedLinks = mergeSgLinks(SG_DEFAULT_LINKS[flow] || [], aiSgLinks);
+  const baseLinks = defaultLinksFor(flow, userText, chipTag);
+  const mergedLinks = mergeSgLinks(baseLinks, aiSgLinks);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
