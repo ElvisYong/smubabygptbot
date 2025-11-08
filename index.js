@@ -36,30 +36,34 @@ const OFFLIMIT_RE =
 // ───────────────────── SG “More information” links ──────────────────
 const SG_DEFAULT_LINKS = {
   cry: [
-    "https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
-    "https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
+    "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+    "https://www.healthhub.sg/well-being-and-lifestyle/pregnancy-and-infant-health/help-my-baby-wont-stop-crying",
+    "https://www.healthhub.sg/live-healthy/how-can-i-get-my-baby-to-sleep-well-and-safely",
+    "https://www.healthhub.sg/live-healthy/surviving-sleep-deprivation-with-a-baby",
   ],
   nutrition: [
     "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
     "https://www.healthhub.sg/programmes/parent-hub/recipes",
+    "https://www.healthhub.sg/live-healthy/getting-baby-started-on-solids",
+    "https://www.healthhub.sg/live-healthy/what-to-eat-while-breastfeeding",
+    "https://www.healthhub.sg/live-healthy/child_choking",
   ],
   caregiver: [
-    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
-    "https://www.life.gov.sg/services/parenting/preschool",
-    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    "https://www.ecda.gov.sg/parents/other-services/childminding-pilot-for-infants",
+    "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
+    "https://www.ecda.gov.sg/beanstalk/parents-portal/parent-guides/choosing-a-preschool",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/8-steps-to-hiring-a-helper",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/are-you-eligible-to-hire-a-helper-in-singapore",
   ],
   advice: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
+    "https://www.healthhub.sg/programmes/parent-hub/parentingforwellness",
+    "https://www.ncss.gov.sg/research-and-insights/community-resources/mental-well-being/for-parents/",
+    "https://zhenghua.pa.gov.sg/files/a%20parent_s%20guide%20to%20mental%20health%20in%20children%20and%20adolescents.pdf",
   ],
   wellbeing: [
-    "https://www.imh.com.sg/contact-us/Pages/default.aspx",
-    "https://www.sos.org.sg",
+    "https://www.healthhub.sg/live-healthy/the-abcs-of-healthy-screen-time-for-your-child",
   ],
-  unknown: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy",
-  ],
+  unknown: ["https://healthhub.sg"],
 };
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
@@ -72,6 +76,10 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "pa.gov.sg",
+  "ncss.gov.sg",
+  "lifesg.gov.sg",
+  "data.gov.sg",
   "familiesforlife.sg",
 ];
 
@@ -440,14 +448,19 @@ function normalizeUrl(u) {
   }
 }
 
-async function fetchWithTimeout(url, { timeoutMs = RAG_TIMEOUT_MS, headers = {} } = {}) {
+async function fetchWithTimeout(
+  url,
+  { timeoutMs = RAG_TIMEOUT_MS, headers = {} } = {}
+) {
   const ctl = new AbortController();
   const id = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; BabyGPT/1.0; +https://example.invalid)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent":
+          "Mozilla/5.0 (compatible; BabyGPT/1.0; +https://example.invalid)",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         ...headers,
       },
       signal: ctl.signal,
@@ -491,13 +504,7 @@ function planRagSources(flow, userText, aiBody) {
   const base = SG_DEFAULT_LINKS[flow] || [];
   const aiLinks = extractUrls(aiBody || "").filter(isAllowedSG);
   const merged = [...base, ...aiLinks];
-  const normed = Array.from(
-    new Set(
-      merged
-        .map(normalizeUrl)
-        .filter(Boolean)
-    )
-  );
+  const normed = Array.from(new Set(merged.map(normalizeUrl).filter(Boolean)));
   return normed.slice(0, RAG_MAX);
 }
 
@@ -580,7 +587,9 @@ async function composeFromNotes(flow, userText, chipTag, baseHint, notesList) {
         { role: "user", content: user },
       ],
     });
-    return r.choices[0].message.content?.trim() || "Here are some steps you can try.";
+    return (
+      r.choices[0].message.content?.trim() || "Here are some steps you can try."
+    );
   }, "composeFromNotes");
 
   return text;
