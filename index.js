@@ -30,31 +30,34 @@ const OFFLIMIT_RE =
 // ───────────────────── SG “More information” links ──────────────────
 const SG_DEFAULT_LINKS = {
   cry: [
-    "https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
-    "https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
+    "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+    "https://www.healthhub.sg/well-being-and-lifestyle/pregnancy-and-infant-health/help-my-baby-wont-stop-crying",
+    "https://www.healthhub.sg/live-healthy/how-can-i-get-my-baby-to-sleep-well-and-safely",
+    "https://www.healthhub.sg/live-healthy/surviving-sleep-deprivation-with-a-baby",
   ],
   nutrition: [
     "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
     "https://www.healthhub.sg/programmes/parent-hub/recipes",
+    "https://www.healthhub.sg/live-healthy/getting-baby-started-on-solids",
+    "https://www.healthhub.sg/live-healthy/what-to-eat-while-breastfeeding",
+    "https://www.healthhub.sg/live-healthy/child_choking",
   ],
   caregiver: [
-    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/parents/other-services/childminding-pilot-for-infants",
     "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
-    "https://www.life.gov.sg/services/parenting/preschool",
-    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    "https://www.ecda.gov.sg/beanstalk/parents-portal/parent-guides/choosing-a-preschool",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/8-steps-to-hiring-a-helper",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/are-you-eligible-to-hire-a-helper-in-singapore",
   ],
   advice: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
+    "https://www.healthhub.sg/programmes/parent-hub/parentingforwellness",
+    "https://www.ncss.gov.sg/research-and-insights/community-resources/mental-well-being/for-parents/",
+    "https://zhenghua.pa.gov.sg/files/a%20parent_s%20guide%20to%20mental%20health%20in%20children%20and%20adolescents.pdf",
   ],
   wellbeing: [
-    "https://www.imh.com.sg/contact-us/Pages/default.aspx",
-    "https://www.sos.org.sg",
+    "https://www.healthhub.sg/live-healthy/the-abcs-of-healthy-screen-time-for-your-child",
   ],
-  unknown: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy",
-  ],
+  unknown: ["https://healthhub.sg"],
 };
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
@@ -67,6 +70,8 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "pa.gov.sg",
+  "ncss.gov.sg",
   "lifesg.gov.sg",
   "data.gov.sg",
   "familiesforlife.sg",
@@ -167,9 +172,7 @@ const INTENTS = {
   },
   wellbeing: {
     label: "Parental Wellbeing",
-    chips: [
-      { tag: "conflict", label: "🧭 Conflicting advice" },
-    ],
+    chips: [{ tag: "conflict", label: "🧭 Conflicting advice" }],
     patterns: {
       conflict: /conflicting|too many opinions|overload|disagree/i,
     },
@@ -541,7 +544,8 @@ async function searchInfantcareInArea(area, limit = 5) {
 }
 
 function extractCaregiverAreaQuery(text = "") {
-  const re = /\b(?:infant\s?care|infantcare|child\s?care|preschool)s?[^\n]*?\b(?:in|at|around|near)\s+([A-Za-z][A-Za-z \-]{1,40})\b/i;
+  const re =
+    /\b(?:infant\s?care|infantcare|child\s?care|preschool)s?[^\n]*?\b(?:in|at|around|near)\s+([A-Za-z][A-Za-z \-]{1,40})\b/i;
   const m = text.match(re);
   if (!m) return null;
   return m[1].replace(/[^\w\s\-]/g, "").trim();
@@ -549,7 +553,9 @@ function extractCaregiverAreaQuery(text = "") {
 
 function isPreschoolOrInfantcareQuery(text = "") {
   const s = text.toLowerCase();
-  return /\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/.test(s);
+  return /\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/.test(
+    s
+  );
 }
 
 function buildLifeSgSteps(area = null) {
@@ -563,7 +569,8 @@ function buildLifeSgSteps(area = null) {
     "Open a centre page to view address, fees, vacancies; add to shortlist.",
     "Shortlist 2–3 centres and arrange visits before deciding.",
   ].join("\n");
-  const links = "LifeSG: https://www.life.gov.sg\nECDA Preschool Search (web): https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx\nECDA Step-by-step Guide (PDF): https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf";
+  const links =
+    "LifeSG: https://www.life.gov.sg\nECDA Preschool Search (web): https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx\nECDA Step-by-step Guide (PDF): https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf";
   return `${header}\n${steps}\n\n${links}`;
 }
 
@@ -586,9 +593,7 @@ function defaultLinksFor(flow, userText, chipTag = null) {
     ];
   }
   if (sub === "nanny") {
-    return [
-      "https://familiesforlife.sg/parenting",
-    ];
+    return ["https://familiesforlife.sg/parenting"];
   }
   // infantcare/preschool or generic caregiver search defaults
   return [
@@ -1006,7 +1011,9 @@ async function handleMessageLike(chatId, userText, options = {}) {
     : "";
 
   // Disclaimer always
-  const reply = `${lifesgGuide ? lifesgGuide + "\n\n" : ""}${localList ? localList + "\n\n" : ""}${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
+  const reply = `${lifesgGuide ? lifesgGuide + "\n\n" : ""}${
+    localList ? localList + "\n\n" : ""
+  }${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;
