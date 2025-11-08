@@ -29,10 +29,10 @@ flowchart TD
 
   %% Callback path
   B --> B0[answerCbq]
-  B -->|"flow:<flow>"| D[Set state; show kbContext]
-  B -->|"tips:<flow>"| E[Send tips menu]
-  B -->|"tip:<flow>:<tag>"| F[Send tip text + kbFooter]
-  B -->|"chip:<flow>:<tag>"| G[handleMessageLike(forcedFlow, forcedTag)]
+  B -->|flow:FLOW| D[Set state; show kbContext]
+  B -->|tips:FLOW| E[Send tips menu]
+  B -->|tip:FLOW:TAG| F[Send tip text + kbFooter]
+  B -->|chip:FLOW:TAG| G[handleMessageLike]
   B -->|nav:type| H[Prompt to type + kbFooter]
   B -->|nav:home| I[Clear state; send kbMain]
   B -->|nav:change| J[Clear state; send kbMain]
@@ -41,16 +41,16 @@ flowchart TD
   C -->|/start| K[Clear state; send intro + kbMain]
   C -->|EMERGENCY_RE| L[Send 995/A&E message + kbMain]
   C -->|OFFLIMIT_RE| M[Send decline + helplines + kbMain]
-  C -->|else| N[handleMessageLike(state.flow || ruleIntentTop(text))]
+  C -->|else| N[handleMessageLike]
 
   %% Core composition
   subgraph S[handleMessageLike]
-    N --> N1[Decide flow: forcedFlow || state.flow || ruleIntentTop]
-    N1 -->|help| Nhelp[Send "Choose a topic" + kbMain]
-    N1 --> N2[chipTag=forcedTag; baseHint per flow]
-    N2 --> N3[composeAI(flow, userText, chipTag, baseHint)]
+    N --> N1[Decide flow]
+    N1 -->|help| Nhelp[Send choose-a-topic + kbMain]
+    N1 --> N2[Chip tag and base hint]
+    N2 --> N3[composeAI]
     N3 --> N4{chipTag has canonical default?}
-    N4 -->|yes| N5[judge default vs AI; pick AI if confidence ≥ 0.65]
+    N4 -->|yes| N5[judge default vs AI; use AI if confidence >= 0.65]
     N4 -->|no| N6[use AI text]
     N5 --> N6
 
@@ -60,15 +60,15 @@ flowchart TD
     N7 -->|no| N8
 
     subgraph CG[Caregiver extras]
-      CG1[If area in text → search Data.gov.sg for nearby centres (top 5)]
-      CG2[Prepend LifeSG steps (ECDA-governed) to reply]
+      CG1[If area: search Data.gov.sg top 5]
+      CG2[Prepend LifeSG steps]
       N6 --> CG1 --> CG2 --> N8
     end
 
-    N8[Links] --> N9[aiLinks=extractUrls(aiBody) ∩ whitelist; baseLinks=defaultLinksFor(flow,userText,chipTag); merged ≤ 6]
+    N8[Links] --> N9[Filter + merge links <= 6]
     N9 --> N10[Append disclaimer]
-    N10 --> N11[Update state.turns; choose keyboard:\n  unknown → kbFooter;\n  in-flow first 3 → kbFooter;\n  else → none;\n  no flow → kbMain]
-    N11 --> N12[sendMsg(reply, replyKb)]
+    N10 --> N11[Choose keyboard:<br/>unknown: kbFooter;<br/>in-flow first 3: kbFooter;<br/>else: none;<br/>no flow: kbMain]
+    N11 --> N12[sendMsg]
   end
 ```
 
@@ -76,10 +76,10 @@ Menu → flow → chips/tips navigation map
 
 ```mermaid
 flowchart LR
-  MM[🏠 Main menu / kbMain] -->|"flow:cry"| Cry[🍼 Crying / Sleep]
-  MM -->|"flow:nutrition"| Nut[🥣 Nutrition]
-  MM -->|"flow:caregiver"| Care[👩‍🍼 Caregiving]
-  MM -->|"flow:wellbeing"| Well[🧘 Parental Wellbeing]
+  MM[🏠 Main menu / kbMain] -->|flow:cry| Cry[🍼 Crying / Sleep]
+  MM -->|flow:nutrition| Nut[🥣 Nutrition]
+  MM -->|flow:caregiver| Care[👩‍🍼 Caregiving]
+  MM -->|flow:wellbeing| Well[🧘 Parental Wellbeing]
 
   subgraph Cry[cry chips]
     Cry --> Night[🌙 night]
@@ -109,14 +109,14 @@ flowchart LR
   subgraph Tips[tips menu]
     TipsBtn --> Tip1[📝 visit-checklist]
     TipsBtn --> Tip2[📄 ECDA step-by-step]
-    TipsBtn --> Back[⬅️ Back → flow:caregiver]
+    TipsBtn --> Back[Back to flow:caregiver]
   end
 
   %% Chip taps call into one-hop answer with judge (if canonical) then AI
-  Night --> HML1[handleMessageLike(forcedFlow, forcedTag)]
-  Gas --> HML2[handleMessageLike(forcedFlow, forcedTag)]
-  Naps --> HML3[handleMessageLike(forcedFlow, forcedTag)]
-  Bedtime --> HML4[handleMessageLike(forcedFlow, forcedTag)]
+  Night --> HML1[handleMessageLike]
+  Gas --> HML2[handleMessageLike]
+  Naps --> HML3[handleMessageLike]
+  Bedtime --> HML4[handleMessageLike]
   Solids --> HML5
   Milk --> HML6
   Meals --> HML7
@@ -422,7 +422,3 @@ Caregiver enrichment specifics:
 - Data.gov.sg listing not shown → Dataset unavailable or no matches for the area; the bot falls back to LifeSG steps and links.
 
 ---
-
-## 📄 License
-
-ISC
