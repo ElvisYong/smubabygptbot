@@ -29,10 +29,10 @@ flowchart TD
 
   %% Callback path
   B --> B0[answerCbq]
-  B -->|flow:<flow>| D[Set state {flow,turns=0}; send kbContext(flow)]
-  B -->|tips:<flow>| E[Send tips menu kbTipsMenu(flow)]
-  B -->|tip:<flow>:<tag>| F[Send tip text + kbFooter]
-  B -->|chip:<flow>:<tag>| G[handleMessageLike(forcedFlow, forcedTag)]
+  B -->|flow:(flow)| D["Set state (flow, turns=0); send kbContext(flow)"]
+  B -->|tips:(flow)| E[Send tips menu kbTipsMenu(flow)]
+  B -->|tip:(flow):(tag)| F[Send tip text + kbFooter]
+  B -->|chip:(flow):(tag)| G[handleMessageLike(forcedFlow, forcedTag)]
   B -->|nav:type| H[Prompt to type + kbFooter]
   B -->|nav:home| I[Clear state; send kbMain]
   B -->|nav:change| J[Clear state; send kbMain]
