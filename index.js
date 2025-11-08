@@ -65,6 +65,57 @@ const SG_DEFAULT_LINKS = {
   ],
   unknown: ["https://healthhub.sg"],
 };
+
+// Granular per-chip links to improve relevance
+const CHIP_LINKS = {
+  cry: {
+    night: [
+      "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+      "https://www.healthhub.sg/live-healthy/how-can-i-get-my-baby-to-sleep-well-and-safely",
+      "https://www.healthhub.sg/live-healthy/surviving-sleep-deprivation-with-a-baby",
+    ],
+    gas: [
+      "https://www.healthhub.sg/well-being-and-lifestyle/pregnancy-and-infant-health/help-my-baby-wont-stop-crying",
+      "https://www.healthhub.sg/a-z/diseases-and-conditions/colic",
+    ],
+    naps: [
+      "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+    ],
+    bedtime: [
+      "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+      "https://www.healthhub.sg/live-healthy/how-can-i-get-my-baby-to-sleep-well-and-safely",
+    ],
+  },
+  nutrition: {
+    solids: [
+      "https://www.healthhub.sg/live-healthy/getting-ready-for-solids",
+      "https://www.healthhub.sg/live-healthy/getting-baby-started-on-solids",
+      "https://www.healthhub.sg/live-healthy/babys_first_food_journey",
+    ],
+    milk: [
+      "https://www.healthhub.sg/live-healthy/pregnancy-breastfeeding",
+      "https://www.healthhub.sg/live-healthy/the-essentials-of-bottle-feeding",
+      "https://www.healthhub.sg/live-healthy/what-to-eat-while-breastfeeding",
+    ],
+    meals: [
+      "https://www.healthhub.sg/live-healthy/meal-ideas-month-7",
+      "https://www.healthhub.sg/live-healthy/meal-ideas-month-8",
+      "https://www.healthhub.sg/live-healthy/meal-ideas-month-9",
+    ],
+    allergy: [
+      "https://www.healthhub.sg/live-healthy/does-my-baby-have-allergies",
+      "https://www.healthhub.sg/live-healthy/what-are-common-food-allergies",
+      "https://www.healthhub.sg/live-healthy/child_choking",
+    ],
+  },
+  wellbeing: {
+    conflict: [
+      "https://www.healthhub.sg/programmes/parent-hub/parentingforwellness",
+      "https://www.healthhub.sg/live-healthy/creating-a-happy-home-for-your-child",
+      "https://www.healthhub.sg/live-healthy/the-abcs-of-healthy-screen-time-for-your-child",
+    ],
+  },
+};
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
   "hpb.gov.sg",
@@ -1005,12 +1056,38 @@ async function handleMessageLike(chatId, userText, options = {}) {
     if (defaultText) finalBody = defaultText;
   }
 
-  // Links: prefer RAG sources if RAG answer is used; else derive from chosen body
+  // Links: prefer RAG sources if RAG answer is used; else per-flow defaults (chip-aware) + links from body
   if (rag?.body && finalBody === rag.body && Array.isArray(rag.sources)) {
     finalLinks = mergeSgLinks([], rag.sources);
   } else {
     const chosenLinks = extractUrls(finalBody).filter(isAllowedSG);
-    const baseLinks = SG_DEFAULT_LINKS[flow] || [];
+    let baseLinks = SG_DEFAULT_LINKS[flow] || [];
+    // Per-chip defaults (cry/nutrition/wellbeing)
+    if (chipTag && CHIP_LINKS[flow]?.[chipTag]) {
+      baseLinks = CHIP_LINKS[flow][chipTag];
+    }
+    // Caregiver subtopic filtering
+    if (flow === "caregiver") {
+      const s = userText.toLowerCase();
+      const p = INTENTS.caregiver?.patterns || {};
+      let sub = chipTag || null;
+      if (!sub) {
+        if (p.mdw?.test?.(s)) sub = "mdw";
+        else if (p.nanny?.test?.(s)) sub = "nanny";
+        else if (p.infantcare?.test?.(s)) sub = "infantcare";
+      }
+      if (sub === "mdw") {
+        baseLinks = SG_DEFAULT_LINKS.caregiver.filter((u) =>
+          u.includes("mom.gov.sg")
+        );
+      } else if (sub === "nanny") {
+        baseLinks = ["https://familiesforlife.sg/parenting"];
+      } else if (sub === "infantcare") {
+        baseLinks = SG_DEFAULT_LINKS.caregiver.filter(
+          (u) => u.includes("ecda.gov.sg") || u.includes("life.gov.sg")
+        );
+      }
+    }
     finalLinks = mergeSgLinks(baseLinks, chosenLinks);
   }
 
