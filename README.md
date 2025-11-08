@@ -29,10 +29,10 @@ flowchart TD
 
   %% Callback path
   B --> B0[answerCbq]
-  B -->|flow:(flow)| D["Set state (flow, turns=0); send kbContext(flow)"]
-  B -->|tips:(flow)| E[Send tips menu kbTipsMenu(flow)]
-  B -->|tip:(flow):(tag)| F[Send tip text + kbFooter]
-  B -->|chip:(flow):(tag)| G[handleMessageLike(forcedFlow, forcedTag)]
+  B -->|"flow:<flow>"| D[Set state; show kbContext]
+  B -->|"tips:<flow>"| E[Send tips menu]
+  B -->|"tip:<flow>:<tag>"| F[Send tip text + kbFooter]
+  B -->|"chip:<flow>:<tag>"| G[handleMessageLike(forcedFlow, forcedTag)]
   B -->|nav:type| H[Prompt to type + kbFooter]
   B -->|nav:home| I[Clear state; send kbMain]
   B -->|nav:change| J[Clear state; send kbMain]
@@ -76,12 +76,12 @@ Menu → flow → chips/tips navigation map
 
 ```mermaid
 flowchart LR
-  MM[🏠 Main menu (kbMain)] -->|flow:cry| Cry[🍼 Crying / Sleep]
-  MM -->|flow:nutrition| Nut[🥣 Nutrition]
-  MM -->|flow:caregiver| Care[👩‍🍼 Caregiving]
-  MM -->|flow:wellbeing| Well[🧘 Parental Wellbeing]
+  MM[🏠 Main menu / kbMain] -->|"flow:cry"| Cry[🍼 Crying / Sleep]
+  MM -->|"flow:nutrition"| Nut[🥣 Nutrition]
+  MM -->|"flow:caregiver"| Care[👩‍🍼 Caregiving]
+  MM -->|"flow:wellbeing"| Well[🧘 Parental Wellbeing]
 
-  subgraph Cry[cry chips (kbContext)]
+  subgraph Cry[cry chips]
     Cry --> Night[🌙 night]
     Cry --> Gas[😣 gas]
     Cry --> Naps[💤 naps]
