@@ -30,31 +30,34 @@ const OFFLIMIT_RE =
 // ───────────────────── SG “More information” links ──────────────────
 const SG_DEFAULT_LINKS = {
   cry: [
-    "https://www.healthhub.sg/live-healthy/1637/baby_sleep_basics",
-    "https://www.kkh.com.sg/healtharticles/baby-sleep-basics",
+    "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/baby-sleep",
+    "https://www.healthhub.sg/well-being-and-lifestyle/pregnancy-and-infant-health/help-my-baby-wont-stop-crying",
+    "https://www.healthhub.sg/live-healthy/how-can-i-get-my-baby-to-sleep-well-and-safely",
+    "https://www.healthhub.sg/live-healthy/surviving-sleep-deprivation-with-a-baby",
   ],
   nutrition: [
     "https://www.healthhub.sg/programmes/parent-hub/baby-toddler/childhood-healthy-diet",
     "https://www.healthhub.sg/programmes/parent-hub/recipes",
+    "https://www.healthhub.sg/live-healthy/getting-baby-started-on-solids",
+    "https://www.healthhub.sg/live-healthy/what-to-eat-while-breastfeeding",
+    "https://www.healthhub.sg/live-healthy/child_choking",
   ],
   caregiver: [
-    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/parents/other-services/childminding-pilot-for-infants",
     "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
-    "https://www.life.gov.sg/services/parenting/preschool",
-    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    "https://www.ecda.gov.sg/beanstalk/parents-portal/parent-guides/choosing-a-preschool",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/8-steps-to-hiring-a-helper",
+    "https://www.mom.gov.sg/passes-and-permits/work-permit-for-foreign-domestic-worker/publications-and-resources/hiring-an-mdw/are-you-eligible-to-hire-a-helper-in-singapore",
   ],
   advice: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy/1144/mental_health_tips_for_parents",
+    "https://www.healthhub.sg/programmes/parent-hub/parentingforwellness",
+    "https://www.ncss.gov.sg/research-and-insights/community-resources/mental-well-being/for-parents/",
+    "https://zhenghua.pa.gov.sg/files/a%20parent_s%20guide%20to%20mental%20health%20in%20children%20and%20adolescents.pdf",
   ],
   wellbeing: [
-    "https://www.imh.com.sg/contact-us/Pages/default.aspx",
-    "https://www.sos.org.sg",
+    "https://www.healthhub.sg/live-healthy/the-abcs-of-healthy-screen-time-for-your-child",
   ],
-  unknown: [
-    "https://familiesforlife.sg/parenting",
-    "https://www.healthhub.sg/live-healthy",
-  ],
+  unknown: ["https://healthhub.sg"],
 };
 const SG_ALLOWED_HOSTS = [
   "healthhub.sg",
@@ -67,6 +70,10 @@ const SG_ALLOWED_HOSTS = [
   "imh.com.sg",
   "sos.org.sg",
   "gov.sg",
+  "pa.gov.sg",
+  "ncss.gov.sg",
+  "lifesg.gov.sg",
+  "data.gov.sg",
   "familiesforlife.sg",
 ];
 
@@ -432,7 +439,11 @@ function inferCaregiverSubtopic(text = "") {
   if (p.mdw && p.mdw.test(s)) return "mdw";
   if (p.nanny && p.nanny.test(s)) return "nanny";
   // Heuristic: common preschool/infantcare words
-  if (/\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/i.test(s))
+  if (
+    /\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/i.test(
+      s
+    )
+  )
     return "infantcare";
   return null;
 }
@@ -446,9 +457,7 @@ function defaultLinksFor(flow, userText, chipTag = null) {
     ];
   }
   if (sub === "nanny") {
-    return [
-      "https://familiesforlife.sg/parenting",
-    ];
+    return ["https://familiesforlife.sg/parenting"];
   }
   // infantcare/preschool or generic caregiver defaults
   return [
@@ -752,7 +761,9 @@ async function handleMessageLike(chatId, userText, options = {}) {
   // Links (grouped defaults for caregiver; merge with AI links; limit to ~6)
   const aiLinks = extractUrls(aiBody);
   const baseLinks = defaultLinksFor(flow, userText, chipTag);
-  const mergedLinks = Array.from(new Set([...(baseLinks || []), ...(aiLinks || [])])).slice(0, 6);
+  const mergedLinks = Array.from(
+    new Set([...(baseLinks || []), ...(aiLinks || [])])
+  ).slice(0, 6);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
