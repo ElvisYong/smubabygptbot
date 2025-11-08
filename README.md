@@ -81,28 +81,28 @@ flowchart LR
   MM -->|flow:caregiver| Care[👩‍🍼 Caregiving]
   MM -->|flow:wellbeing| Well[🧘 Parental Wellbeing]
 
-  subgraph Cry[cry chips]
+  subgraph CryChips[cry chips]
     Cry --> Night[🌙 night]
     Cry --> Gas[😣 gas]
     Cry --> Naps[💤 naps]
     Cry --> Bedtime[🧸 bedtime]
   end
 
-  subgraph Nut[nutrition chips]
+  subgraph NutChips[nutrition chips]
     Nut --> Solids[🥄 solids]
     Nut --> Milk[🍼 milk]
     Nut --> Meals[🍚 meals]
     Nut --> Allergy[🥜 allergy]
   end
 
-  subgraph Care[caregiver chips]
+  subgraph CareChips[caregiver chips]
     Care --> Infantcare[👶 infantcare]
     Care --> MDW[🧹 helper/MDW]
     Care --> Nanny[👩 nanny]
     Care --> TipsBtn[💡 Tips]
   end
 
-  subgraph Well[wellbeing chips]
+  subgraph WellChips[wellbeing chips]
     Well --> Conflict[🧭 conflicting advice]
   end
 
@@ -112,18 +112,20 @@ flowchart LR
     TipsBtn --> Back[Back to flow:caregiver]
   end
 
-  %% Chip taps call into one-hop answer with judge (if canonical) then AI
-  Night --> HML1[handleMessageLike]
-  Gas --> HML2[handleMessageLike]
-  Naps --> HML3[handleMessageLike]
-  Bedtime --> HML4[handleMessageLike]
-  Solids --> HML5
-  Milk --> HML6
-  Meals --> HML7
-  Allergy --> HML8
-  Infantcare --> HML9
-  MDW --> HML10
-  Nanny --> HML11
+  %% Chip taps go to a shared answer pipeline
+  ANS[compose and send reply]
+  Night --> ANS
+  Gas --> ANS
+  Naps --> ANS
+  Bedtime --> ANS
+  Solids --> ANS
+  Milk --> ANS
+  Meals --> ANS
+  Allergy --> ANS
+  Infantcare --> ANS
+  MDW --> ANS
+  Nanny --> ANS
+  Conflict --> ANS
 
   %% Navigation buttons
   classDef nav fill:#eef,stroke:#99f,color:#000;
