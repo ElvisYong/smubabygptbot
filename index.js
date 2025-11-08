@@ -39,6 +39,7 @@ const SG_DEFAULT_LINKS = {
   ],
   caregiver: [
     "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
     "https://www.life.gov.sg/services/parenting/preschool",
     "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
   ],
@@ -423,6 +424,40 @@ function mergeSgLinks(defaultLinks = [], aiLinks = []) {
   return unique.slice(0, 6);
 }
 
+// ───────────────────── Link selection helpers (v1 grouping backported) ─────
+function inferCaregiverSubtopic(text = "") {
+  const s = text.toLowerCase();
+  const p = INTENTS.caregiver?.patterns || {};
+  if (p.infantcare && p.infantcare.test(s)) return "infantcare";
+  if (p.mdw && p.mdw.test(s)) return "mdw";
+  if (p.nanny && p.nanny.test(s)) return "nanny";
+  // Heuristic: common preschool/infantcare words
+  if (/\b(preschool|infant\s?care|infantcare|child\s?care|kindergarten|playgroup)\b/i.test(s))
+    return "infantcare";
+  return null;
+}
+
+function defaultLinksFor(flow, userText, chipTag = null) {
+  if (flow !== "caregiver") return SG_DEFAULT_LINKS[flow] || [];
+  const sub = chipTag || inferCaregiverSubtopic(userText) || "generic";
+  if (sub === "mdw") {
+    return [
+      "https://www.mom.gov.sg/passes-and-permits/work-permit-for-migrant-domestic-worker",
+    ];
+  }
+  if (sub === "nanny") {
+    return [
+      "https://familiesforlife.sg/parenting",
+    ];
+  }
+  // infantcare/preschool or generic caregiver defaults
+  return [
+    "https://www.ecda.gov.sg/parents/Pages/Preschool-Search.aspx",
+    "https://www.ecda.gov.sg/docs/default-source/default-document-library/parents/step-by-step-guide-for-parents.pdf",
+    "https://www.life.gov.sg/services/parenting/preschool",
+  ];
+}
+
 // ───────────────────── OpenAI helpers & judge ───────────────────────
 async function callOpenAI(fn, label) {
   try {
@@ -714,11 +749,10 @@ async function handleMessageLike(chatId, userText, options = {}) {
   // Always use AI output (weaker policy for comparison)
   let finalBody = aiBody;
 
-  // Links
+  // Links (grouped defaults for caregiver; merge with AI links; limit to ~6)
   const aiLinks = extractUrls(aiBody);
-  const mergedLinks = Array.from(
-    new Set([...(aiLinks || []), ...(SG_DEFAULT_LINKS[flow] || [])])
-  ).slice(0, 6);
+  const baseLinks = defaultLinksFor(flow, userText, chipTag);
+  const mergedLinks = Array.from(new Set([...(baseLinks || []), ...(aiLinks || [])])).slice(0, 6);
   const moreInfo = mergedLinks.length
     ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";

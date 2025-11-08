@@ -26,8 +26,8 @@ BabyGPT focuses on **providing accurate information and practical steps** rather
 ## ✨ Flow v2 — What changed
 
 - **Main menu + chips UI**: After choosing a topic (Cry, Nutrition, Caregiving, Conflicting Advice), you get context-specific chips (subtopics) to narrow the request.
-- **Answer Judge (on chip taps only)**: For some chips, the bot has a short, canonical default answer. It also generates an AI answer, then uses a judge to pick the better one (threshold 0.65). Free-typed follow-ups go AI-first without judging.
-- **SG link policy**: AI-proposed links are filtered to whitelisted SG domains and merged with curated defaults for the selected flow.
+- **Simpler answers (no judge in v0)**: Replies are generated directly by the model for both chips and free-typed messages.
+- **Links (v0)**: AI-extracted URLs are merged with a small curated set; not strictly SG-only in this branch.
 - **Turn-aware footer**: A compact footer with navigation shows for the first few turns in a flow.
 - **Tips menu + Type-your-own**: Per-flow quick tips and an explicit "💬 Type my own question" option.
 - **Unknown-friendly persona**: When the message doesn’t fit any flow, the bot answers gently (no diagnosis) and shows basic navigation.
@@ -103,9 +103,8 @@ Endpoints:
 
 ## 🛡️ Safety & Guardrails (as implemented)
 
-- Emergency escalation: messages matching severe symptoms (e.g., “blue lips”, “not breathing”, very high fever) trigger an immediate “Call 995 / go to A&E” response.
-- Off-limit topics: self-harm, suicide, sexual content, violence, illegal topics, loans/money lending are declined with helpline pointers.
-- Explicit disclaimer appended to AI responses: “General info only. For emergencies, call 995.”
+- This v0 branch uses simplified checks and a lighter disclaimer.
+- Explicit disclaimer appended to AI responses: “Note: General information only. For urgent concerns, seek professional help in your area.”
 
 ---
 
@@ -114,13 +113,51 @@ Endpoints:
 - Top-level routing via lightweight regex mapper (`ruleIntentTop`): `cry`, `nutrition`, `caregiver`, `advice`, plus `wellbeing` and `help` for special handling.
 - Flow is sticky per chat (`state` stores `{ flow, turns }`). Selecting a flow from the main menu sets the flow and shows context chips.
 - Chip detection inside a flow via regex patterns, or explicit chip selection from the UI.
-- For chips with canonical guidance, the bot may pick between the canonical default and AI-generated answer using a judge (see below).
+- In v0, answers are sent directly from the model (no judge step).
+
+## 🗺️ Intent Flow (v0)
+
+Intent routing from free‑typed messages
+
+```mermaid
+flowchart TD
+  M[message text] --> R[ruleIntentTop]
+  R -->|cry| Cry[cry]
+  R -->|nutrition| Nut[nutrition]
+  R -->|caregiver| Care[caregiver]
+  R -->|advice| Adv[advice]
+  R -->|wellbeing| Well[wellbeing]
+  R -->|help| Help[send kbMain]
+  R -->|else| Unk[unknown gentle persona]
+```
+
+Callback navigation (buttons)
+
+```mermaid
+flowchart LR
+  MM[Main menu] -->|flow:cry| Cry
+  MM -->|flow:nutrition| Nut
+  MM -->|flow:caregiver| Care
+  MM -->|flow:advice| Adv
+
+  Cry -->|chip:cry:*| H1[handleMessageLike]
+  Nut -->|chip:nutrition:*| H2[handleMessageLike]
+  Care -->|chip:caregiver:*| H3[handleMessageLike]
+  Adv -->|chip:advice:*| H4[handleMessageLike]
+
+  MM -->|nav:home| MM
+  MM -->|nav:change| MM
+  Cry -->|tips:cry| T1[tips menu]
+  Nut -->|tips:nutrition| T2[tips menu]
+  Care -->|tips:caregiver| T3[tips menu]
+  Adv -->|tips:advice| T4[tips menu]
+```
 
 ### Response Composition
 
-1. Compose: The bot calls OpenAI (`gpt-4o-mini`) to compose concise, step-first guidance (≤180 words). System rules emphasise SG context and safety.
-2. Judge (when a canonical default exists): Compares canonical vs AI answer and selects the better one if `confidence ≥ 0.65`. If the judge errors (e.g., quota), it uses the canonical default.
-3. Links: Extracts URLs from the AI answer, filters to SG whitelisted hosts, and merges with curated defaults per flow.
+1. Compose: The bot calls OpenAI to produce a friendly, light, conversational reply with a few practical ideas (kept reasonably concise).
+2. Judge: Not used in v0 — the model’s answer is sent directly.
+3. Links: Extracts URLs from the AI answer and merges them with curated defaults; not strictly SG-whitelisted in v0; trimmed to ~6 total.
 4. Footer & turns: Shows a small nav footer for the first few turns within a flow; always appends the safety disclaimer.
 
 ---
@@ -191,7 +228,7 @@ User: /start
 Bot shows main menu (Cry / Nutrition / Caregiving / Conflicting Advice)  
 ⬇️ User taps “🍼 Crying / Sleep” → chips appear (`🌙 Wakes at night`, `😣 Gas / tummy discomfort`, `💤 Day naps`, `🧸 Bedtime routine`)  
 ⬇️ User taps `😣 Gas / tummy discomfort`  
-Bot composes an AI answer, compares with the canonical gas snippet (judge threshold 0.65), and sends the better one.  
+Bot composes an AI answer and sends it.  
 Bot appends curated SG links and the standard disclaimer.
 
 ### Example: Caregiver Search Path
@@ -199,7 +236,7 @@ Bot appends curated SG links and the standard disclaimer.
 User: /start → taps 👩‍🍼 Caregiving  
 Chips: `👶 Infantcare`, `🧹 Helper / MDW`, `👩 Nanny/Babysitter`  
 ⬇️ User taps `👶 Infantcare`  
-Bot replies with a concise checklist (canonical vs AI judged) and adds ECDA/LifeSG links.
+Bot replies with a concise AI-generated checklist and adds “More information” links.
 
 ---
 
@@ -215,10 +252,9 @@ Bot replies with a concise checklist (canonical vs AI judged) and adds ECDA/Life
 
 ## 🔗 SG Links Policy
 
-- AI links are extracted from the model output and filtered to whitelisted SG domains only: `healthhub.sg`, `hpb.gov.sg`, `moh.gov.sg`, `kkh.com.sg`, `ecda.gov.sg`, `life.gov.sg`, `mom.gov.sg`, `imh.com.sg`, `sos.org.sg`, `gov.sg`, `familiesforlife.sg`.
-- Curated default links per flow are always preferred; filtered AI links are merged on top, deduplicated, and trimmed.
-- Unknown flow has safe defaults referencing Families for Life and HealthHub overview pages.
-- All replies end with: `_Disclaimer: General info only. For emergencies, call 995._`
+- In v0, links extracted from the AI reply are merged with a small curated set and deduplicated (not strictly SG-only).
+- Unknown flow has simple defaults.
+- All replies end with: `_Note: General information only. For urgent concerns, seek professional help in your area._`
 
 ---
 
