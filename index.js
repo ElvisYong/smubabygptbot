@@ -408,8 +408,8 @@ const sendMsg = (chat_id, text, keyboard, label = "sendMessage") =>
     "sendMessage",
     {
       chat_id,
-      text,
-      parse_mode: "Markdown",
+      text: text,
+      parse_mode: "HTML",
       disable_web_page_preview: false,
       reply_markup: keyboard,
     },
@@ -421,6 +421,12 @@ const answerCbq = (id, label = "answerCallbackQuery") =>
 // ───────────────────── URL extraction & SG filter ───────────────────
 function extractUrls(text = "") {
   return Array.from(new Set(text.match(/https?:\/\/[^\s)\]]+/g) || []));
+}
+function escapeHtml(text = "") {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 function isAllowedSG(url) {
   try {
@@ -769,17 +775,17 @@ app.post("/telegram/webhook", async (req, res) => {
         const flow = data.split(":")[1];
         state.set(chatId, { flow, turns: 0 });
         const promptMap = {
-          cry: "Tell me your baby’s age and when the crying/sleep issue happens. 💬 *You can also type your own question anytime!*",
+          cry: "Tell me your baby’s age and when the crying/sleep issue happens. 💬 You can also type your own question anytime.",
           nutrition:
-            "Share your feeding concern (starting solids, milk amounts, meal ideas). 💬 *You can also type your own question anytime!*",
+            "Share your feeding concern (starting solids, milk amounts, meal ideas). 💬 You can also type your own question anytime.",
           caregiver:
-            "Tell me what you need (infantcare, helper/MDW, nanny) and your area. 💬 *You can also type your own question anytime!*",
+            "Tell me what you need (infantcare, helper/MDW, nanny) and your area. 💬 You can also type your own question anytime.",
           wellbeing:
-            "Share what’s causing stress or conflicting advice, and what you’ve tried. 💬 *You can also type your own question anytime!*",
+            "Share what’s causing stress or conflicting advice, and what you’ve tried. 💬 You can also type your own question anytime.",
         };
         await sendMsg(
           chatId,
-          `${promptMap[flow]}\n\n_Current topic: ${flow.toUpperCase()}._`,
+          escapeHtml(`${promptMap[flow]}\n\nCurrent topic: ${flow.toUpperCase()}.`),
           kbContext(flow),
           "send(context)"
         );
@@ -863,23 +869,23 @@ app.post("/telegram/webhook", async (req, res) => {
     if (text === "/start") {
       state.delete(chatId);
       const intro = `
-👶 *Hi, I'm BabyGPT (Singapore Edition)!*  
-Your friendly companion for *first-time parents* of babies aged *0–3 years*.
+👶 Hi, I'm BabyGPT (Singapore Edition)!
+Your friendly companion for first-time parents of babies aged 0–3 years.
 
 I can help with:
-1️⃣ *Health & Development* — sleep & crying, feeding & growth milestones  
-2️⃣ *Caregiving Support* — infantcare options, helpers, and resolving conflicting advice  
-3️⃣ *Parental Wellbeing* — self-care and emotional balance
+1) Health & Development — sleep & crying, feeding & growth milestones
+2) Caregiving Support — infantcare options, helpers, and resolving conflicting advice
+3) Parental Wellbeing — self-care and emotional balance
 
-✨ *You don’t have to stick to buttons!*  
-Just **type your question in your own words**, like:  
-> “My baby keeps waking up at 3am, what should I do?”  
-> “How much milk should a 4-month-old drink?”
+You don’t have to stick to buttons.
+Just type your question in your own words, like:
+- “My baby keeps waking up at 3am, what should I do?”
+- “How much milk should a 4‑month‑old drink?”
 
-I’m not a medical professional, but I’ll share practical steps and *trusted Singapore resources* (HealthHub, ECDA, MOM).
+I’m not a medical professional, but I’ll share practical steps and trusted Singapore resources (HealthHub, ECDA, MOM).
 
-💬 *What would you like help with today?*`;
-      await sendMsg(chatId, intro.trim(), kbMain, "send(/start)");
+What would you like help with today?`.trim();
+      await sendMsg(chatId, escapeHtml(intro), kbMain, "send(/start)");
       return;
     }
 
@@ -1007,13 +1013,11 @@ async function handleMessageLike(chatId, userText, options = {}) {
   const baseLinks = defaultLinksFor(flow, userText, chipTag);
   const mergedLinks = mergeSgLinks(baseLinks, aiSgLinks);
   const moreInfo = mergedLinks.length
-    ? "\n\n*More information:*\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
+    ? "\n\nMore information:\n" + mergedLinks.map((u) => `• ${u}`).join("\n")
     : "";
 
   // Disclaimer always
-  const reply = `${lifesgGuide ? lifesgGuide + "\n\n" : ""}${
-    localList ? localList + "\n\n" : ""
-  }${finalBody}${moreInfo}\n\n_Reminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995._`;
+  const reply = `${lifesgGuide ? lifesgGuide + "\n\n" : ""}${localList ? localList + "\n\n" : ""}${finalBody}${moreInfo}\n\nReminder: General info only—every family is different. Trust yourself and learn as you go. For emergencies, call 995.`;
 
   // Track turns
   const turns = (s.turns || 0) + 1;
@@ -1030,7 +1034,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
       : kbMain;
   state.set(chatId, { flow, turns });
 
-  await sendMsg(chatId, reply, replyKb);
+  await sendMsg(chatId, escapeHtml(reply), replyKb);
 }
 
 // ───────────────────────── Health & Webhook setup ───────────────────
