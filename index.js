@@ -428,6 +428,21 @@ function escapeHtml(text = "") {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 }
+function escapeAttr(text = "") {
+  return String(text).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+function mdToHtmlSafe(input = "") {
+  let s = escapeHtml(input);
+  // Headings (#, ##, ### ...) -> bold line
+  s = s.replace(/^(#{1,6})\s+(.+)$/gm, (_m, _h, title) => `<b>${title}</b>`);
+  // Bold **text**
+  s = s.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `<b>${inner}</b>`);
+  // Markdown links [label](url) -> <a href=\"url\">label</a>
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label, url) => {
+    return `<a href="${escapeAttr(url)}">${label}</a>`;
+  });
+  return s;
+}
 function isAllowedSG(url) {
   try {
     const h = new URL(url).hostname.toLowerCase();
@@ -785,7 +800,7 @@ app.post("/telegram/webhook", async (req, res) => {
         };
         await sendMsg(
           chatId,
-          escapeHtml(`${promptMap[flow]}\n\nCurrent topic: ${flow.toUpperCase()}.`),
+          mdToHtmlSafe(`${promptMap[flow]}\n\nCurrent topic: ${flow.toUpperCase()}.`),
           kbContext(flow),
           "send(context)"
         );
@@ -885,7 +900,7 @@ Just type your question in your own words, like:
 I’m not a medical professional, but I’ll share practical steps and trusted Singapore resources (HealthHub, ECDA, MOM).
 
 What would you like help with today?`.trim();
-      await sendMsg(chatId, escapeHtml(intro), kbMain, "send(/start)");
+      await sendMsg(chatId, mdToHtmlSafe(intro), kbMain, "send(/start)");
       return;
     }
 
@@ -1034,7 +1049,7 @@ async function handleMessageLike(chatId, userText, options = {}) {
       : kbMain;
   state.set(chatId, { flow, turns });
 
-  await sendMsg(chatId, escapeHtml(reply), replyKb);
+  await sendMsg(chatId, mdToHtmlSafe(reply), replyKb);
 }
 
 // ───────────────────────── Health & Webhook setup ───────────────────
